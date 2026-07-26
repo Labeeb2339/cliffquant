@@ -1,0 +1,4 @@
+# Preserve byte-level evidence identities on every checkout.
+research/results/experiment-001/** -text
+figures/figure-manifest.json -text
+figures/*.png -text

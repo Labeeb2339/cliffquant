@@ -238,8 +238,7 @@ def test_fresh_load_strictly_unwraps_dequantizers_without_mutating_environment(
     assert os.environ["TORCH_COMPILE_DISABLE"] == "preserve-me"
     assert all(module._cache_enabled is cache_dequantized_weights for module in modules)
     assert all(
-        getattr(module.dequantize_weight, "__func__", None)
-        is TorchLinear.dequantize_weight
+        getattr(module.dequantize_weight, "__func__", None) is TorchLinear.dequantize_weight
         for module in modules
     )
 
@@ -270,9 +269,7 @@ def test_fresh_load_rejects_compiled_dequantizer_without_original_bound_method(
         module.dequantize_weight = compiled  # type: ignore[method-assign]
     modules[17].dequantize_weight = lambda num_itr=1: num_itr  # type: ignore[method-assign]
     model = types.SimpleNamespace(
-        named_modules=lambda: [
-            (f"layer.{index}", module) for index, module in enumerate(modules)
-        ]
+        named_modules=lambda: [(f"layer.{index}", module) for index, module in enumerate(modules)]
     )
     contract = types.SimpleNamespace(
         BACKEND=types.SimpleNamespace(GPTQ_TORCH="torch"),

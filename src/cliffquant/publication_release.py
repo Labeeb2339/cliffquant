@@ -130,6 +130,12 @@ _STATIC_PAYLOAD_PATHS = frozenset(
 )
 
 
+def _scale_source_binding_sha256(source: Mapping[str, Any]) -> str:
+    """Return the scale-run binding for the complete snapshot descriptor."""
+
+    return sha256_bytes(canonical_json_bytes(dict(source)))
+
+
 def _strict_json_object(payload: bytes, *, label: str) -> dict[str, Any]:
     def object_hook(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         value: dict[str, Any] = {}
@@ -624,6 +630,7 @@ def _recompute_proxy_summary(
         "sample_size",
         "sampling",
         "schema",
+        "source_fingerprint",
         "weight_sha256_encoding",
     } or manifest != {
         **manifest,
@@ -664,6 +671,8 @@ def _recompute_proxy_summary(
         if key not in {"input_fingerprint", "sample_manifest", "schema"}
     }
     source_fingerprint = sha256_bytes(canonical_json_bytes(source))
+    if manifest["source_fingerprint"] != source_fingerprint:
+        raise ValueError("proxy sample manifest source fingerprint is not reproducible")
     input_fingerprint = sha256_bytes(
         canonical_json_bytes(
             {
@@ -1388,7 +1397,7 @@ def _validate_scale_manifest_offline(
     )
     if (
         source != identity["base_model"]["source"]
-        or metadata["base_fingerprint"] != source["fingerprint_sha256"]
+        or metadata["base_fingerprint"] != _scale_source_binding_sha256(source)
         or metadata["gptqmodel_revision"] != QWEN35_GPTQMODEL_TREE_REVISION
         or metadata["corpus_replay"] != identity["corpus_replay"]
     ):

@@ -25,7 +25,7 @@ dev = [
   "build>=1.2",
   "packaging>=26.2",
   "pytest>=8.0",
-  "ruff>=0.6",
+  "ruff==0.16.0",
 ]
 figures = [
   "matplotlib==3.10.8",
@@ -44,3 +44,7 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.format]
+# This file's exact bytes are recorded by the released verifier identities.
+exclude = ["src/cliffquant/full_model_verify.py"]

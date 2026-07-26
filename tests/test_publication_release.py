@@ -150,6 +150,12 @@ def _small_proxy_evidence(
                 "weight_sha256": f"{index + 3:064x}",
             }
         )
+    source = {
+        "environments": ["general"],
+        "sample_size": 2,
+        "seed": release.EXPERIMENT_001_SEED,
+    }
+    source_fingerprint = sha256_bytes(canonical_json_bytes(source))
     manifest = {
         "entries": entries,
         "group_size": 2,
@@ -160,6 +166,7 @@ def _small_proxy_evidence(
             "seed": release.EXPERIMENT_001_SEED,
         },
         "schema": "cliffquant.experiment-001.sample.v1",
+        "source_fingerprint": source_fingerprint,
         "weight_sha256_encoding": "canonical-array-float64-little-endian",
     }
     manifest_path = root / "sample.manifest.json"
@@ -169,12 +176,6 @@ def _small_proxy_evidence(
         "sha256": release.sha256_file(manifest_path),
         "size_bytes": manifest_path.stat().st_size,
     }
-    source = {
-        "environments": ["general"],
-        "sample_size": 2,
-        "seed": release.EXPERIMENT_001_SEED,
-    }
-    source_fingerprint = sha256_bytes(canonical_json_bytes(source))
     input_fingerprint = sha256_bytes(
         canonical_json_bytes(
             {
@@ -932,6 +933,25 @@ def test_offline_scale_calibration_source_is_fully_bound() -> None:
             identity=identity,
             policy=release.POLICY_CLIFFQUANT,
         )
+
+
+def test_scale_source_binding_hashes_the_complete_descriptor() -> None:
+    source = {
+        "fingerprint_sha256": "1" * 64,
+        "files": [
+            {
+                "path": "config.json",
+                "sha256": "2" * 64,
+                "size_bytes": 10,
+            }
+        ],
+        "model_id": release.BASE_MODEL_ID,
+        "revision": release.BASE_MODEL_REVISION,
+    }
+
+    expected = sha256_bytes(canonical_json_bytes(source))
+    assert release._scale_source_binding_sha256(source) == expected
+    assert expected != source["fingerprint_sha256"]
 
 
 def test_offline_scale_module_rejects_extra_object_fields() -> None:
