@@ -44,6 +44,7 @@ def test_sanitized_environment_drops_process_injection_and_rehomes_caches(
         "CONDA_PREFIX": "other-environment",
         "UV_PROJECT_ENVIRONMENT": "other-venv",
         "VIRTUAL_ENV": "other-venv",
+        "TORCHINDUCTOR_CACHE_DIR": r"C:\shared-torch-cache",
         "SECRET_TOKEN": "must-not-cross-boundary",
     }
 
@@ -70,6 +71,10 @@ def test_sanitized_environment_drops_process_injection_and_rehomes_caches(
     assert environment["PYTHONHASHSEED"] == "2339"
     assert Path(environment["HF_HOME"]).is_relative_to(tmp_path)
     assert Path(environment["TORCH_HOME"]).is_relative_to(tmp_path)
+    assert Path(environment["TORCHINDUCTOR_CACHE_DIR"]).is_relative_to(tmp_path)
+    assert environment["TORCHINDUCTOR_CACHE_DIR"] == str(
+        tmp_path / "cache" / "torch-inductor"
+    )
     assert source["PYTHONPATH"] == "malicious-source"
 
 

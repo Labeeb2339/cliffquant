@@ -55,18 +55,20 @@ The runner:
    mode, and disables user and pip configuration;
 3. installs only wheels from the external wheelhouse, offline, with
    `--require-hashes`, `--only-binary`, and no dependency expansion;
-4. requires the hashed lock to contain the same package versions as
+4. rehomes Hugging Face, PyTorch, extension, and Inductor caches inside the
+   disposable workspace;
+5. requires the hashed lock to contain the same package versions as
    `requirements/verification-cu128.txt`, plus the pinned bootstrap tools;
-5. fetches GPTQModel at commit
+6. fetches GPTQModel at commit
    `581bfd970b8b67372ed61b0ef449d88f5388d196`;
-6. builds both projects from clean detached sources and installs non-editable
+7. builds both projects from clean detached sources and installs non-editable
    wheels;
-7. verifies imports resolve inside the new venv and requires a successful
+8. verifies imports resolve inside the new venv and requires a successful
    `pip check`;
-8. records path-free commit, tree, lock, wheelhouse, built-wheel, package, and
+9. records path-free commit, tree, lock, wheelhouse, built-wheel, package, and
    runtime identities;
-9. loads the checkpoint through GPTQModel's `GPTQ_TORCH` backend; and
-10. runs each greedy generation twice, rejecting differing token sequences or
+10. loads the checkpoint through GPTQModel's `GPTQ_TORCH` backend; and
+11. runs each greedy generation twice, rejecting differing token sequences or
    non-finite score tensors.
 
 The external wheelhouse is not committed because it contains multi-gigabyte

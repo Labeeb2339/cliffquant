@@ -146,6 +146,7 @@ def _sanitized_environment(
                 "TMPDIR": str(temporary_root),
                 "TORCH_EXTENSIONS_DIR": str(cache_root / "torch-extensions"),
                 "TORCH_HOME": str(cache_root / "torch"),
+                "TORCHINDUCTOR_CACHE_DIR": str(cache_root / "torch-inductor"),
                 "XDG_CACHE_HOME": str(cache_root),
             }
         )
