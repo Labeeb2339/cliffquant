@@ -59,6 +59,41 @@ class SolveResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ApproximateSearchProvenance:
+    """Auditable description of one deterministic approximate search."""
+
+    method: str
+    no_clipping_scale: float
+    coarse_log2_alpha_min: float
+    coarse_log2_alpha_max: float
+    coarse_log2_alpha_step: float
+    coarse_scale_bits: tuple[int, ...]
+    basin_seed_bits: tuple[int, ...]
+    basin_initial_bounds: tuple[tuple[int, int], ...]
+    refinement_levels: int
+    refinement_points_per_level: int
+    candidate_scale_bits: tuple[int, ...]
+    best_origins: tuple[str, ...]
+    degenerate_reason: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ApproximateSolveResult:
+    """Result of the deterministic non-exhaustive search."""
+
+    scale: float
+    scale_bits: int
+    codes: tuple[int, ...]
+    per_environment_loss: tuple[float, ...]
+    objective: float
+    candidates_evaluated: int
+    coarse_candidates_evaluated: int
+    refinement_candidates_evaluated: int
+    coarse_best_objective: float
+    provenance: ApproximateSearchProvenance
+
+
+@dataclass(frozen=True, slots=True)
 class PreparedProblem:
     """Validated contiguous arrays for internal numerical code."""
 

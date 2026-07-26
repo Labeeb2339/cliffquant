@@ -1,6 +1,13 @@
 """Correctness-first exhaustive FP16 scale selection."""
 
-from cliffquant.contracts import QuantizerSpec, ScaleEvaluation, SolveResult
+from cliffquant.approximate import solve_approximate
+from cliffquant.contracts import (
+    ApproximateSearchProvenance,
+    ApproximateSolveResult,
+    QuantizerSpec,
+    ScaleEvaluation,
+    SolveResult,
+)
 from cliffquant.fp16_grid import (
     FP16_MAX_FINITE_BITS,
     FP16_MIN_POSITIVE_BITS,
@@ -17,6 +24,8 @@ __all__ = [
     "FP16_MAX_FINITE_BITS",
     "FP16_MIN_POSITIVE_BITS",
     "FP16_POSITIVE_FINITE_COUNT",
+    "ApproximateSearchProvenance",
+    "ApproximateSolveResult",
     "QuantizerSpec",
     "ScaleEvaluation",
     "SolveResult",
@@ -27,6 +36,7 @@ __all__ = [
     "positive_finite_fp16_scales",
     "quantize_codes",
     "scale_to_bits",
+    "solve_approximate",
     "solve_exact",
 ]
 
