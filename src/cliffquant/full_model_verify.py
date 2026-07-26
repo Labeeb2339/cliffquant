@@ -619,7 +619,8 @@ class TensorCheckpoint:
             except ImportError as exc:
                 raise RuntimeError("safetensors is required for checkpoint verification") from exc
             with safe_open(single_path, framework="pt", device="cpu") as handle:
-                self._weight_map = {key: single_path.name for key in handle}
+                tensor_keys = handle.keys()
+                self._weight_map = {str(key): single_path.name for key in tensor_keys}
             self.index_path = None
         else:
             raise FileNotFoundError(f"checkpoint has no standard model safetensors: {self.root}")

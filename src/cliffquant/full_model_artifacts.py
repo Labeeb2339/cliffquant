@@ -509,7 +509,8 @@ class SafetensorsWeightSource:
                     "safetensors is required to inspect the pinned base checkpoint"
                 ) from exc
             with safe_open(single_path, framework="pt", device="cpu") as handle:
-                weight_map = {key: single_path.name for key in handle}
+                tensor_keys = handle.keys()
+                weight_map = {str(key): single_path.name for key in tensor_keys}
         else:
             raise FileNotFoundError("base snapshot has no model safetensors checkpoint")
 

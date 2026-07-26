@@ -572,6 +572,22 @@ def test_tensor_checkpoint_rejects_unindexed_shard_keys(tmp_path: Path) -> None:
         TensorCheckpoint(root)
 
 
+def test_tensor_checkpoint_reads_single_safetensors_file(tmp_path: Path) -> None:
+    pytest.importorskip("safetensors")
+    from safetensors.numpy import save_file
+
+    root = tmp_path / "checkpoint"
+    root.mkdir()
+    tensor = np.arange(6, dtype=np.float32).reshape(2, 3)
+    save_file({"model.weight": tensor}, root / "model.safetensors")
+
+    checkpoint = TensorCheckpoint(root)
+
+    assert checkpoint.index_path is None
+    assert checkpoint.keys == frozenset({"model.weight"})
+    np.testing.assert_array_equal(checkpoint.read("model.weight").numpy(), tensor)
+
+
 def test_corpus_replay_pair_fingerprint_is_immutable() -> None:
     replay = _fake_replay_pair()
     assert validate_corpus_replay_pair(replay) == replay
