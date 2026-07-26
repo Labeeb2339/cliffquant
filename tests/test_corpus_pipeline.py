@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import json
-import sys
 from itertools import pairwise
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -21,7 +19,6 @@ from cliffquant.corpus import (
     XNLI_LANGUAGES,
     build_environment_windows,
     build_phase_manifest,
-    load_pinned_rows,
     reject_manifest_overlap,
     render_record,
     save_phase_bundle,
@@ -236,40 +233,3 @@ def test_phase_bundle_contains_exact_arrays_and_verified_hashes(tmp_path: Path) 
     with np.load(archive_path) as arrays:
         for environment in ENVIRONMENTS:
             assert arrays[f"{environment}__input_ids"].shape == (4, 16)
-
-
-def test_pinned_loader_filters_before_seeded_stream_shuffle(monkeypatch) -> None:
-    events: list[object] = []
-
-    class FakeStream:
-        def __init__(self) -> None:
-            self.rows = [{"text": "  "}, {"text": "valid record"}]
-
-        def __iter__(self):
-            events.append("iterate")
-            return iter(self.rows)
-
-    def load_dataset(dataset, subset, *, split, revision, streaming):
-        events.append(("load", dataset, subset, split, revision, streaming))
-        return FakeStream()
-
-    monkeypatch.setitem(sys.modules, "datasets", SimpleNamespace(load_dataset=load_dataset))
-    source = CALIBRATION_SOURCES["general"][0]
-    rows = load_pinned_rows(
-        source,
-        environment="general",
-        max_records=1,
-        shuffle_buffer=17,
-    )
-    assert rows == [{"text": "valid record", "__cliffquant_source_index__": 1}]
-    assert events == [
-        (
-            "load",
-            source.dataset,
-            source.subset,
-            source.split,
-            source.revision,
-            True,
-        ),
-        "iterate",
-    ]

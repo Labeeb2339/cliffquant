@@ -2,9 +2,9 @@
 
 Status: frozen before collecting Qwen activation statistics or comparing policies.
 
-Addendum 001-A was frozen after implementing the loader, but before any real
-corpus or model collection. It resolves text-rendering and sampling details that
-the first version left implicit.
+Addendum 001-A was frozen after implementing the first loader, but before any
+real corpus or model collection. Addendum 001-B was then frozen after that
+backend failed its usability diagnostic, again before accepting any real data.
 
 ## Question
 
@@ -63,6 +63,9 @@ software versions, device, and every normalization constant.
 
 ## Addendum 001-A: rendering and deterministic sampling
 
+The rendering rules in this addendum remain active. Its bounded streaming
+sampling backend is superseded by Addendum 001-B below.
+
 The tokenizer is called with `add_special_tokens=False`. Records use these exact
 UTF-8 templates after trimming their component fields:
 
@@ -92,6 +95,55 @@ source offsets, text hashes, window hashes, and every segment used by a window.
 
 This is a deterministic bounded-stream sample, not a claim of uniform sampling
 over an entire dataset.
+
+## Addendum 001-B: verified, resumable Dataset Viewer collection
+
+On 2026-07-26, the pinned `datasets.load_dataset(..., streaming=True)` backend
+did not return even a 100-row WikiText diagnostic after more than 20 minutes on
+the experiment's Windows host. The diagnostic was terminated. No real corpus
+rows, token manifests, activation statistics, policy comparisons, model
+checkpoints, or outcome artifacts had been accepted or produced before this
+amendment. The failure was a backend-usability result, not an experimental
+result.
+
+The replacement keeps Addendum 001-A's rendering, tokenization, filtering,
+deduplication, and downstream ordering rules, but replaces its source sampler:
+
+1. Before reading a cached or remote page, query the Hugging Face Hub dataset
+   metadata endpoint and require its current repository SHA to equal the source's
+   frozen 40-character revision exactly. Refuse the run on drift. Dataset Viewer
+   pages are not accepted merely because an old local cache exists.
+2. Obtain `num_rows_total` from a complete Dataset Viewer `/rows` response.
+   Requests use fixed pages of 100 rows. Reject partial responses, missing or
+   non-contiguous `row_idx` values, unexpected page lengths, changed totals, and
+   any row whose `truncated_cells` list is non-empty.
+3. Derive a source-specific integer seed from SHA256 of canonical JSON containing
+   `seed=2339`, the environment, dataset, config, split, and revision. Shuffle
+   the complete list of page indices once with `random.Random(derived_seed)`.
+   Rows remain in ascending `row_idx` order within each selected page.
+4. Preserve the Viewer `row_idx` as `__cliffquant_source_index__`. Apply the
+   frozen environment renderer before accepting a row, so empty or invalid rows
+   do not count toward the limit. Stop at exactly 10,000 valid records, or after
+   all pages if the split contains fewer valid records.
+5. Cache every response page beneath the caller's output directory. The cache
+   identity includes dataset, revision, config, split, fixed page coordinates,
+   and schema version. Each canonical response is SHA256-addressed; cache
+   envelopes, filenames, and hashes are verified before reuse. Writes use an
+   atomic same-directory replacement.
+6. Use separate connection and socket-read timeouts with at most three retries
+   after the first attempt. Emit page-level progress to standard error so a
+   stalled collection is observable and a rerun visibly resumes from cache.
+
+The phase manifest records the verified current SHA, total row count, page size,
+derived page seed, SHA256 of the complete shuffled page order, every selection
+page and canonical response hash, the accepted valid-record count, and the
+content-addressed cache identity. Operational cache-hit status is deliberately
+excluded from the hashed manifest so a resumed run produces the same scientific
+provenance as its uninterrupted equivalent.
+
+This is deterministic page sampling, not uniform row sampling. The protocol was
+amended because the original backend was unusable before data collection, not
+because an observed model or policy result was unfavorable.
 
 ## Held-out data
 

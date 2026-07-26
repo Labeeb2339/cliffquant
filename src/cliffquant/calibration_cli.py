@@ -15,6 +15,7 @@ from .corpus import (
     CALIBRATION_SOURCES,
     ENVIRONMENTS,
     HELDOUT_SOURCES,
+    MAX_VALID_RECORDS,
     MODEL_ID,
     MODEL_REVISION,
     Phase,
@@ -25,6 +26,7 @@ from .corpus import (
     save_phase_bundle,
     synthetic_rows,
 )
+from .dataset_viewer import VIEWER_PAGE_SIZE
 from .provenance import canonical_json_bytes, runtime_metadata, tokenizer_metadata
 from .qwen35_modules import QWEN35_GPTQMODEL_TREE_REVISION
 
@@ -61,15 +63,26 @@ def _load_rows(
     phase: Phase,
     *,
     max_records: int,
-    shuffle_buffer: int,
+    cache_dir: Path,
+    audits: dict[str, dict[str, Any]],
+    connect_timeout: float,
+    read_timeout: float,
+    max_retries: int,
 ) -> dict[str, dict[str, Iterable[Mapping[str, Any]]]]:
     def deferred_rows(source: Any, environment: str) -> Iterable[Mapping[str, Any]]:
-        yield from load_pinned_rows(
+        source_audit: dict[str, Any] = {}
+        loaded = load_pinned_rows(
             source,
             environment=environment,
             max_records=max_records,
-            shuffle_buffer=shuffle_buffer,
+            cache_dir=cache_dir,
+            audit=source_audit,
+            connect_timeout=connect_timeout,
+            read_timeout=read_timeout,
+            max_retries=max_retries,
         )
+        audits[source.key] = source_audit
+        yield from loaded
 
     result: dict[str, dict[str, Iterable[Mapping[str, Any]]]] = {}
     for environment in ENVIRONMENTS:
@@ -158,8 +171,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--corpus-only", action="store_true")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--max-records", type=int, default=10_000)
-    parser.add_argument("--shuffle-buffer", type=int, default=10_000)
+    parser.add_argument("--max-records", type=int, default=MAX_VALID_RECORDS)
+    parser.add_argument("--connect-timeout", type=float, default=10.0)
+    parser.add_argument("--read-timeout", type=float, default=30.0)
+    parser.add_argument("--max-retries", type=int, default=3)
     parser.add_argument(
         "--calibration-manifest",
         type=Path,
@@ -173,6 +188,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     if args.batch_size <= 0:
         raise ValueError("--batch-size must be positive")
+    if not args.dry_run and args.max_records != MAX_VALID_RECORDS:
+        raise ValueError(f"Experiment 001 freezes --max-records at {MAX_VALID_RECORDS}")
+    if args.connect_timeout <= 0 or args.read_timeout <= 0:
+        raise ValueError("--connect-timeout and --read-timeout must be positive")
+    if not 0 <= args.max_retries <= 3:
+        raise ValueError("--max-retries must be between zero and three")
     if args.phase == "heldout" and args.calibration_manifest is None:
         raise ValueError("--calibration-manifest is required for --phase heldout")
 
@@ -195,14 +216,20 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     runtime_info = runtime_metadata(device=device)
     manifests: dict[str, dict[str, Any]] = {}
     windows_by_phase: dict[str, Mapping[str, Sequence[Any]]] = {}
+    args.output_dir.mkdir(parents=True, exist_ok=True)
     for phase in phases:
+        source_audits: dict[str, dict[str, Any]] = {}
         rows = (
             synthetic_rows(phase=phase, repetitions=96)
             if args.dry_run
             else _load_rows(
                 phase,
                 max_records=args.max_records,
-                shuffle_buffer=args.shuffle_buffer,
+                cache_dir=args.output_dir / "dataset-viewer-cache",
+                audits=source_audits,
+                connect_timeout=args.connect_timeout,
+                read_timeout=args.read_timeout,
+                max_retries=args.max_retries,
             )
         )
         manifest, windows = build_phase_manifest(
@@ -220,9 +247,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "method": (
                 "synthetic"
                 if args.dry_run
-                else "pinned datasets stream; filter; deterministic Python buffer shuffle"
+                else (
+                    "Hub-SHA-verified Dataset Viewer /rows; deterministic "
+                    "100-row page shuffle; content-addressed local cache"
+                )
             ),
-            "shuffle_buffer": args.shuffle_buffer if not args.dry_run else None,
+            "cache_directory": "dataset-viewer-cache" if not args.dry_run else None,
+            "page_size": VIEWER_PAGE_SIZE if not args.dry_run else None,
+            "sources": source_audits if not args.dry_run else {},
         }
         manifests[phase] = manifest
         windows_by_phase[phase] = windows
@@ -236,7 +268,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         reject_manifest_overlap(calibration_manifest, manifests["heldout"])
 
     results: dict[str, Any] = {"dry_run": args.dry_run, "phases": {}}
-    args.output_dir.mkdir(parents=True, exist_ok=True)
     model = None if args.dry_run or args.corpus_only else _load_model(device)
     for phase in phases:
         bundle_hashes = save_phase_bundle(

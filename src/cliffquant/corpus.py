@@ -2,21 +2,22 @@
 
 from __future__ import annotations
 
-import random
 from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TextIO
 
 import numpy as np
 
+from .dataset_viewer import HTTPGetter, load_dataset_viewer_rows
 from .provenance import canonical_json_bytes, sha256_bytes, sha256_file
 
 SEED = 2339
 WINDOW_TOKENS = 256
 CALIBRATION_WINDOWS = 32
 HELDOUT_WINDOWS = 64
+MAX_VALID_RECORDS = 10_000
 MODEL_ID = "Qwen/Qwen3.5-0.8B-Base"
 MODEL_REVISION = "dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68"
 XNLI_LANGUAGES = ("ar", "es", "hi", "zh")
@@ -684,78 +685,37 @@ def load_pinned_rows(
     *,
     environment: str,
     seed: int = SEED,
-    max_records: int = 10_000,
-    shuffle_buffer: int = 10_000,
+    max_records: int = MAX_VALID_RECORDS,
+    cache_dir: str | Path,
+    audit: MutableMapping[str, Any] | None = None,
+    connect_timeout: float = 10.0,
+    read_timeout: float = 30.0,
+    max_retries: int = 3,
+    retry_backoff: float = 0.5,
+    http_get: HTTPGetter | None = None,
+    progress: TextIO | None = None,
 ) -> list[Mapping[str, Any]]:
-    """Stream a bounded, seeded pool from a pinned Hub revision.
+    """Load a verified, deterministic bounded pool from cached Viewer pages."""
 
-    Streaming avoids materializing XNLI's roughly gigabyte-scale Arrow cache.
-    The pool and buffer sizes are part of the caller's manifest provenance.
-    """
-
-    if max_records <= 0 or shuffle_buffer <= 0:
-        raise ValueError("max_records and shuffle_buffer must be positive")
-    try:
-        from datasets import load_dataset
-    except ImportError as exc:
-        raise RuntimeError("install the optional 'datasets' package for Hub collection") from exc
-
-    stream = load_dataset(
-        source.dataset,
-        source.subset,
-        split=source.split,
-        revision=source.revision,
-        streaming=True,
+    if environment not in ENVIRONMENTS:
+        raise ValueError(f"unsupported environment: {environment}")
+    return load_dataset_viewer_rows(
+        source,
+        environment=environment,
+        seed=seed,
+        max_valid_records=max_records,
+        cache_dir=cache_dir,
+        is_valid=lambda row, source_index: bool(
+            render_record(environment, row, source, source_index)
+        ),
+        audit=audit,
+        connect_timeout=connect_timeout,
+        read_timeout=read_timeout,
+        max_retries=max_retries,
+        retry_backoff=retry_backoff,
+        http_get=http_get,
+        progress=progress,
     )
-    # Filtering precedes sampling. The local buffer shuffle avoids relying on
-    # a mutable Dataset Viewer response and preserves each original row offset.
-    generator = iter(stream)
-    buffer: list[Mapping[str, Any]] = []
-    source_index = 0
-    while len(buffer) < shuffle_buffer:
-        try:
-            row = next(generator)
-        except StopIteration:
-            break
-        current_index = source_index
-        source_index += 1
-        if not isinstance(row, Mapping):
-            continue
-        if not render_record(environment, row, source, current_index):
-            continue
-        enriched = dict(row)
-        enriched["__cliffquant_source_index__"] = current_index
-        buffer.append(enriched)
-
-    rng = random.Random(seed)
-    rows: list[Mapping[str, Any]] = []
-    while buffer and len(rows) < max_records:
-        selected_index = rng.randrange(len(buffer))
-        rows.append(buffer[selected_index])
-        replacement: Mapping[str, Any] | None = None
-        while replacement is None:
-            try:
-                row = next(generator)
-            except StopIteration:
-                break
-            current_index = source_index
-            source_index += 1
-            if not isinstance(row, Mapping):
-                continue
-            if not render_record(environment, row, source, current_index):
-                continue
-            enriched = dict(row)
-            enriched["__cliffquant_source_index__"] = current_index
-            replacement = enriched
-        if replacement is None:
-            buffer.pop(selected_index)
-        else:
-            buffer[selected_index] = replacement
-        if len(rows) == max_records:
-            break
-    if not rows:
-        raise ValueError(f"pinned source produced no records: {source.key}")
-    return rows
 
 
 def synthetic_rows(
