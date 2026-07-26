@@ -99,6 +99,25 @@ _REQUIRED_PACK_PARAMETERS = {
     "quant_linear_cls",
     "quantize_config",
 }
+_QWEN35_GPTQMODEL_WRITER_PASSTHROUGH_KEYS = frozenset(
+    {
+        "mtp.fc.weight",
+        "mtp.layers.0.input_layernorm.weight",
+        "mtp.layers.0.mlp.down_proj.weight",
+        "mtp.layers.0.mlp.gate_proj.weight",
+        "mtp.layers.0.mlp.up_proj.weight",
+        "mtp.layers.0.post_attention_layernorm.weight",
+        "mtp.layers.0.self_attn.k_norm.weight",
+        "mtp.layers.0.self_attn.k_proj.weight",
+        "mtp.layers.0.self_attn.o_proj.weight",
+        "mtp.layers.0.self_attn.q_norm.weight",
+        "mtp.layers.0.self_attn.q_proj.weight",
+        "mtp.layers.0.self_attn.v_proj.weight",
+        "mtp.norm.weight",
+        "mtp.pre_fc_norm_embedding.weight",
+        "mtp.pre_fc_norm_hidden.weight",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -433,6 +452,7 @@ def _restore_non_target_tensors_exact(
     core_model: Any,
     base_source: SafetensorsWeightSource,
     target_weights: set[str],
+    writer_passthrough_keys: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Restore every non-quantized state tensor to its exact base bytes and dtype."""
 
@@ -443,12 +463,18 @@ def _restore_non_target_tensors_exact(
 
     current_state = core_model.state_dict(keep_vars=True)
     expected_keys = base_source.keys - target_weights
-    missing = sorted(expected_keys - set(current_state))
-    if missing:
-        raise ValueError(f"dense wrapper omitted preserved base tensors: {missing}")
+    missing = expected_keys - set(current_state)
+    if missing != writer_passthrough_keys:
+        unexpected = sorted(missing - writer_passthrough_keys)
+        absent_expected = sorted(writer_passthrough_keys - missing)
+        raise ValueError(
+            "dense wrapper preserved-tensor passthrough inventory drift; "
+            f"unexpected={unexpected}, absent_expected={absent_expected}"
+        )
 
     restored: list[dict[str, Any]] = []
-    for key in sorted(expected_keys):
+    checked_keys = expected_keys - writer_passthrough_keys
+    for key in sorted(checked_keys):
         current = current_state[key]
         if current.device.type != "cpu":
             raise RuntimeError(f"non-target tensor must remain on CPU before export: {key}")
@@ -471,9 +497,11 @@ def _restore_non_target_tensors_exact(
             )
 
     return {
-        "checked_tensor_count": len(expected_keys),
+        "checked_tensor_count": len(checked_keys),
         "restored_tensor_count": len(restored),
         "restored_tensors": restored,
+        "writer_passthrough_tensor_count": len(writer_passthrough_keys),
+        "writer_passthrough_tensors": sorted(writer_passthrough_keys),
     }
 
 
@@ -693,6 +721,7 @@ def export_full_model_gptq(
         core_model=core_model,
         base_source=base_source,
         target_weights={module.weight_key for module in scale_run.modules},
+        writer_passthrough_keys=_QWEN35_GPTQMODEL_WRITER_PASSTHROUGH_KEYS,
     )
     wrapper.quantized = True
     wrapper.load_quantized_model = False

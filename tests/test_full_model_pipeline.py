@@ -647,6 +647,8 @@ def test_export_restores_non_target_tensor_dtype_and_values() -> None:
                 "to_dtype": "torch.float32",
             }
         ],
+        "writer_passthrough_tensor_count": 0,
+        "writer_passthrough_tensors": [],
     }
 
 
