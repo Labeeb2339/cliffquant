@@ -1341,6 +1341,7 @@ def _validate_runtime_report(
         or type(report["score_steps"]) is not int
         or report["score_steps"] <= 0
         or report["score_steps"] > report["max_new_tokens"]
+        or report["generated_tokens"] != report["score_steps"]
         or not _is_sha256(report["sequence_sha256"])
         or not isinstance(report["scores_sha256"], list)
         or len(report["scores_sha256"]) != report["score_steps"]
@@ -1737,7 +1738,7 @@ def _check_generation(
         if not bool(torch.all(torch.isfinite(score)).item()):
             raise ValueError("generation produced non-finite logits")
     return {
-        "generated_tokens": int(first_sequences.shape[-1]),
+        "generated_tokens": len(first_scores),
         "score_steps": len(first_scores),
         "sequence_sha256": tensor_sha256(first_sequences),
         "scores_sha256": [tensor_sha256(score) for score in first_scores],

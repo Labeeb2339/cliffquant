@@ -28,6 +28,7 @@ from cliffquant.full_model_verify import (
     RUNTIME_VERIFICATION_SCHEMA,
     VERIFICATION_LOCK_SHA256,
     VERIFICATION_SCHEMA,
+    _check_generation,
     _verifier_identity,
     _write_canonical_report,
     describe_exported_checkpoint,
@@ -283,7 +284,7 @@ def _patch_smoke_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
         verification,
         "_check_generation",
         lambda *_args: {
-            "generated_tokens": 7,
+            "generated_tokens": 2,
             "score_steps": 2,
             "sequence_sha256": "7" * 64,
             "scores_sha256": ["8" * 64, "9" * 64],
@@ -294,6 +295,20 @@ def _patch_smoke_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
         "_verification_runtime",
         _runtime,
     )
+
+
+def test_generation_evidence_counts_only_new_tokens() -> None:
+    torch = pytest.importorskip("torch")
+    sequence = torch.tensor([[10, 11, 12, 13, 14, 15, 16]])
+    scores = [
+        torch.tensor([[0.25, 0.75]]),
+        torch.tensor([[0.50, 0.50]]),
+    ]
+
+    evidence = _check_generation((sequence, scores), (sequence.clone(), list(scores)))
+
+    assert evidence["generated_tokens"] == 2
+    assert evidence["score_steps"] == 2
 
 
 def _write_clean_environment_report(root: Path) -> tuple[Path, dict[str, Any]]:
@@ -619,6 +634,12 @@ def test_runtime_report_requires_generation_evidence(
         device="cpu",
         max_new_tokens=2,
     )
+    mismatched = {**report, "generated_tokens": report["score_steps"] + 1}
+    mismatched_path = tmp_path / "mismatched-generation-count.json"
+    _write_canonical_report(mismatched, mismatched_path)
+    with pytest.raises(ValueError, match="runtime smoke-test evidence drift"):
+        load_verification_report(mismatched_path, checkpoint_dir=checkpoint)
+
     report.pop("scores_sha256")
     missing_path = tmp_path / "missing-generation-evidence.json"
     _write_canonical_report(report, missing_path)
