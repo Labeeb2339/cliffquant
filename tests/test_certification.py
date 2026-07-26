@@ -21,6 +21,15 @@ def test_small_campaign_is_deterministic_and_resumable(tmp_path) -> None:
     assert first["protocol_gate_passed"] is False
     assert first["aggregate_fingerprint_sha256"] == second["aggregate_fingerprint_sha256"]
     assert resumed["aggregate_fingerprint_sha256"] == first["aggregate_fingerprint_sha256"]
+    assert set(first["evidence_provenance"]["sources"]) >= {
+        "breakpoint",
+        "certification",
+        "contracts",
+        "fp16_grid",
+        "objective",
+        "solver",
+    }
+    assert "Users" not in json.dumps(first["evidence_provenance"])
     assert json.loads(first_path.read_text(encoding="utf-8"))["completed_cases"] == 7
 
 

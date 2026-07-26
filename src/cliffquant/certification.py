@@ -10,6 +10,7 @@ import struct
 import time
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -19,9 +20,10 @@ from numpy.typing import NDArray
 from .breakpoint import solve_breakpoint_exact
 from .contracts import QuantizerSpec
 from .fp16_grid import bits_to_scale
+from .provenance import runtime_metadata, sha256_file
 from .solver import solve_exact
 
-_CERTIFICATE_SCHEMA = "cliffquant-solver-certification-v1"
+_CERTIFICATE_SCHEMA = "cliffquant-solver-certification-v2"
 _PROTOCOL_MINIMUM_CASES = 10_000
 
 
@@ -182,6 +184,38 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     temporary.replace(path)
 
 
+@lru_cache(maxsize=1)
+def _evidence_provenance() -> dict[str, Any]:
+    package_dir = Path(__file__).resolve().parent
+    source_paths = {
+        "breakpoint": package_dir / "breakpoint.py",
+        "certification": package_dir / "certification.py",
+        "contracts": package_dir / "contracts.py",
+        "fp16_grid": package_dir / "fp16_grid.py",
+        "objective": package_dir / "objective.py",
+        "solver": package_dir / "solver.py",
+    }
+    repository_protocol = (
+        package_dir.parents[1] / "research" / "SOLVER_CERTIFICATION_001_PROTOCOL.md"
+    )
+    if repository_protocol.is_file():
+        source_paths["protocol"] = repository_protocol
+    missing = [str(path) for path in source_paths.values() if not path.is_file()]
+    if missing:  # pragma: no cover - package installation would be broken
+        raise RuntimeError(f"solver certification source files are missing: {missing}")
+    return {
+        "runtime": runtime_metadata(device="cpu", package_names=("numpy",)),
+        "sources": {
+            name: {
+                "file": path.name,
+                "sha256": sha256_file(path),
+                "size_bytes": path.stat().st_size,
+            }
+            for name, path in sorted(source_paths.items())
+        },
+    }
+
+
 def _aggregate(
     config: CertificationConfig,
     results: list[dict[str, Any]],
@@ -204,6 +238,7 @@ def _aggregate(
     return {
         "schema": _CERTIFICATE_SCHEMA,
         "status": status,
+        "evidence_provenance": _evidence_provenance(),
         "config": asdict(config),
         "completed_cases": len(ordered),
         "mismatch_count": len(mismatches),
