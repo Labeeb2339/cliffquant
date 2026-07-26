@@ -93,6 +93,68 @@ verifier source bytes, and validates the complete structural or generation
 evidence. A sidecar detects accidental drift; the published Git commit and
 reported hashes are the external evidence anchors.
 
+## Held-out NLL evidence
+
+The paired NLL run writes one closed evidence directory containing exactly:
+
+- `heldout-nll.json`;
+- `heldout-nll.raw.npz`; and
+- `heldout-nll.sha256.json`.
+
+The destination must be absent. Generation writes to a sibling staging
+directory, validates the complete staged result, and then uses an atomic
+no-replace rename; failures and destination races leave no partial result.
+
+Validate internal consistency before generating a graph:
+
+```powershell
+python scripts/validate_heldout_nll.py <heldout-nll-result-directory>
+```
+
+For release construction, require live bindings to the frozen corpus and both
+checkpoints:
+
+```powershell
+python scripts/validate_heldout_nll.py <heldout-nll-result-directory> `
+  --heldout-manifest <frozen-corpus-directory>/heldout.manifest.json `
+  --absmax-checkpoint <absmax-gptq-checkpoint> `
+  --cliffquant-checkpoint <cliffquant-gptq-checkpoint>
+```
+
+Validation does not trust the summary. It requires canonical JSON and live
+sidecar hashes and rejects symlinks, Windows reparse points, extra files, path
+escapes, and absolute paths. Before NumPy can allocate or decompress anything,
+it preflights the ZIP and NPY headers, exact member inventory, compression
+methods, dtypes, shapes, payload sizes, and conservative per-entry and total
+uncompressed-size limits. It then opens the archive with `allow_pickle=False`,
+checks all canonical array hashes, and recomputes every window total,
+policy/environment mean, macro mean, CliffQuant-minus-AbsMax delta, and the
+frozen `+0.01` macro and `+0.02` per-environment limits.
+
+Both path-free exported-checkpoint identities are validated with the same
+checkpoint-identity validator used by packed-model verification. Their policy,
+model-payload, scale-run, base-model, GPTQModel, and offline corpus-replay
+bindings must agree with their assigned roles and remain distinct where the
+experiment requires it. The report also binds the exact evaluator source files
+and frozen NLL runtime package inventory. CUDA generation requires deterministic
+algorithms, deterministic cuDNN, disabled benchmarking and TF32, highest
+float32 matmul precision, and the fixed cuBLAS workspace contract. Generation
+re-hashes the evaluator and both checkpoints after evaluation to detect
+concurrent changes.
+
+Saved-only validation establishes byte and arithmetic self-consistency against
+the recorded identities. Live-bound validation additionally replays the frozen
+corpus, checks the recorded masks, and re-hashes both current checkpoints.
+Neither mode alone is cryptographic proof that the recorded model operations
+were actually executed. The publication builder described in
+`research/PUBLICATION_RELEASE_GATE.md` independently reruns both checkpoints
+from the supplied live inputs and requires exact per-array value identities and
+semantic results before it can construct a release.
+
+A structurally valid result whose measured gate failed is still valid negative
+evidence; the command prints it and exits with status 2. Exit status 0 means the
+saved evidence is valid and its recomputed NLL gate passed.
+
 ## Hub release staging
 
 The immutable exported checkpoint contains only the model payload described by
@@ -107,7 +169,7 @@ Hub staging has one explicit opt-in envelope:
 - `assets/proxy-policy-comparison.png`; and
 - `assets/heldout-nll-comparison.png`.
 
-All four paths are required to be regular, non-symlink files inside the staged
+All five paths are required to be regular, non-symlink files inside the staged
 checkpoint. Every other extra file is rejected. Default report validation
 remains strict and rejects the envelope as unmanifested payload.
 
