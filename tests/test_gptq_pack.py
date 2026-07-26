@@ -60,6 +60,26 @@ def test_independent_dequantization_matches_direct_formula() -> None:
     np.testing.assert_array_equal(reconstructed, expected)
 
 
+def test_output_block_dequantization_uses_matching_scale_columns() -> None:
+    rng = np.random.default_rng(23040)
+    codes = rng.integers(-8, 8, size=(16, 256), dtype=np.int8)
+    scales = rng.uniform(0.001, 0.2, size=(2, 16)).astype(np.float16)
+    g_idx = make_g_idx(256, 128)
+    start, stop = 8, 16
+
+    reconstructed = dequantize_gptq_int4(
+        pack_int4_qweight(codes)[:, start:stop],
+        pack_gptq_v1_qzeros(num_groups=2, out_features=16)[:, start // 8 : stop // 8],
+        scales[:, start:stop],
+        g_idx,
+    )
+
+    expected = codes[start:stop].astype(np.float32) * scales[:, start:stop][g_idx].T.astype(
+        np.float32
+    )
+    np.testing.assert_array_equal(reconstructed, expected)
+
+
 @pytest.mark.parametrize(
     ("call", "match"),
     [

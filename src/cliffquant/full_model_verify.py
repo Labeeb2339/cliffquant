@@ -1545,7 +1545,7 @@ def _verify_module_buffers(
                 g_idx,
             )
             codes = unpack_int4_qweight(qweight[:, start:stop]).astype(np.float32)
-            expected = codes * scales[g_idx].T.astype(np.float32)
+            expected = codes * scales[:, start:stop][g_idx].T.astype(np.float32)
             np.testing.assert_array_equal(reconstructed, expected)
             dequant_samples += int(reconstructed.size)
         evidence.append(
