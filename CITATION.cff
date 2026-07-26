@@ -1,0 +1,19 @@
+cff-version: 1.2.0
+message: "If you use CliffQuant in your work, please cite this software."
+title: CliffQuant
+type: software
+authors:
+  - given-names: "Muhammad Labeeb Aryan"
+    family-names: "bin Mohd Lokman"
+version: 0.1.0
+license: Apache-2.0
+repository-code: "https://github.com/Labeeb2339/cliffquant"
+url: "https://github.com/Labeeb2339/cliffquant"
+abstract: >-
+  Correctness-first exhaustive FP16 scale selection for a frozen diagonal
+  quantization proxy.
+keywords:
+  - quantization
+  - W4A16
+  - model compression
+  - reproducible research
