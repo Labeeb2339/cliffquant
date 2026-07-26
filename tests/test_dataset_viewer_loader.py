@@ -24,6 +24,7 @@ from cliffquant.provenance import canonical_json_bytes, sha256_bytes
 class FakeHTTP:
     rows: list[dict[str, Any]]
     sha: str
+    later_hub_shas: list[str] = field(default_factory=list)
     row_failures_remaining: int = 0
     deny_rows: bool = False
     truncated_indices: set[int] = field(default_factory=set)
@@ -39,7 +40,8 @@ class FakeHTTP:
         self.calls.append((url, connect_timeout, read_timeout))
         parsed = urlsplit(url)
         if parsed.hostname == "huggingface.co":
-            return canonical_json_bytes({"sha": self.sha})
+            sha = self.later_hub_shas.pop(0) if self.later_hub_shas else self.sha
+            return canonical_json_bytes({"sha": sha})
         if parsed.hostname != "datasets-server.huggingface.co":
             raise AssertionError(f"unexpected host: {parsed.hostname}")
         if self.deny_rows:
@@ -142,7 +144,7 @@ def test_viewer_loader_is_deterministic_filters_then_caches_and_resumes(
     )
     assert resumed == first
     assert resumed_audit == first_audit
-    assert len(resumed_http.hub_calls) == 1
+    assert len(resumed_http.hub_calls) == 2
     assert resumed_http.row_calls == []
 
 
@@ -212,6 +214,27 @@ def test_revision_drift_refuses_cached_rows_before_viewer_access(tmp_path: Path)
         )
     assert len(drifted.hub_calls) == 1
     assert drifted.row_calls == []
+
+
+def test_revision_drift_after_page_collection_discards_the_run(tmp_path: Path) -> None:
+    source = CALIBRATION_SOURCES["general"][0]
+    transport = FakeHTTP(
+        _general_rows(8),
+        source.revision,
+        later_hub_shas=[source.revision, "0" * 40],
+    )
+    with pytest.raises(DatasetRevisionDriftError, match="dataset revision drift"):
+        load_pinned_rows(
+            source,
+            environment="general",
+            max_records=2,
+            cache_dir=tmp_path,
+            max_retries=0,
+            http_get=transport,
+            progress=StringIO(),
+        )
+    assert len(transport.hub_calls) == 2
+    assert len(transport.row_calls) == 1
 
 
 def test_viewer_loader_rejects_truncated_cells(tmp_path: Path) -> None:

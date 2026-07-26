@@ -308,6 +308,39 @@ def _rows_url(source: DatasetViewerSource, page_index: int) -> str:
     return f"{DATASET_VIEWER_ROWS_API}?{query}"
 
 
+def _verify_current_revision(
+    source: DatasetViewerSource,
+    *,
+    http_get: HTTPGetter,
+    connect_timeout: float,
+    read_timeout: float,
+    max_retries: int,
+    retry_backoff: float,
+    progress: TextIO,
+    label_suffix: str,
+) -> str:
+    metadata_url = f"{HUB_DATASET_API}/{quote(source.dataset, safe='/')}"
+    metadata = _request_json(
+        metadata_url,
+        http_get=http_get,
+        connect_timeout=connect_timeout,
+        read_timeout=read_timeout,
+        max_retries=max_retries,
+        retry_backoff=retry_backoff,
+        progress=progress,
+        label=f"{source.dataset} Hub revision {label_suffix}",
+    )
+    current_sha = metadata.get("sha")
+    if not isinstance(current_sha, str) or _COMMIT_SHA.fullmatch(current_sha) is None:
+        raise DatasetViewerError(f"Hub metadata did not include a SHA for {source.dataset}")
+    if current_sha != source.revision:
+        raise DatasetRevisionDriftError(
+            f"dataset revision drift for {source.dataset}: "
+            f"expected {source.revision}, current {current_sha}"
+        )
+    return current_sha
+
+
 def _load_page(
     source: DatasetViewerSource,
     *,
@@ -436,25 +469,16 @@ def load_dataset_viewer_rows(
     output = progress if progress is not None else sys.stderr
     transport = http_get if http_get is not None else _http_get_bytes
 
-    metadata_url = f"{HUB_DATASET_API}/{quote(source.dataset, safe='/')}"
-    metadata = _request_json(
-        metadata_url,
+    current_sha = _verify_current_revision(
+        source,
         http_get=transport,
         connect_timeout=connect_timeout,
         read_timeout=read_timeout,
         max_retries=max_retries,
         retry_backoff=retry_backoff,
         progress=output,
-        label=f"{source.dataset} Hub revision",
+        label_suffix="before rows",
     )
-    current_sha = metadata.get("sha")
-    if not isinstance(current_sha, str) or _COMMIT_SHA.fullmatch(current_sha) is None:
-        raise DatasetViewerError(f"Hub metadata did not include a SHA for {source.dataset}")
-    if current_sha != source.revision:
-        raise DatasetRevisionDriftError(
-            f"dataset revision drift for {source.dataset}: "
-            f"expected {source.revision}, current {current_sha}"
-        )
     print(
         f"[cliffquant] verified {source.dataset}@{current_sha[:12]} ({environment})",
         file=output,
@@ -548,6 +572,20 @@ def load_dataset_viewer_rows(
 
     if not rows:
         raise DatasetViewerError(f"pinned source produced no valid records: {source.key}")
+    ending_sha = _verify_current_revision(
+        source,
+        http_get=transport,
+        connect_timeout=connect_timeout,
+        read_timeout=read_timeout,
+        max_retries=max_retries,
+        retry_backoff=retry_backoff,
+        progress=output,
+        label_suffix="after rows",
+    )
+    if ending_sha != current_sha:  # pragma: no cover - both must equal the frozen pin
+        raise DatasetRevisionDriftError(
+            f"dataset revision changed during collection: {current_sha} -> {ending_sha}"
+        )
     if audit is not None:
         audit.clear()
         audit.update(

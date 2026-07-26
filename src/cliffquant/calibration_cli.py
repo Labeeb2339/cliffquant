@@ -130,6 +130,7 @@ def _load_tokenizer() -> tuple[Any, dict[str, Any]]:
         tokenizer,
         model_revision=MODEL_REVISION,
         explicit_files=files,
+        logical_name_or_path=MODEL_ID,
     )
 
 
@@ -269,6 +270,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     results: dict[str, Any] = {"dry_run": args.dry_run, "phases": {}}
     model = None if args.dry_run or args.corpus_only else _load_model(device)
+    if model is not None:
+        parameter_dtypes = sorted({str(parameter.dtype) for parameter in model.parameters()})
+        runtime_info = {
+            **runtime_metadata(device=device),
+            "model_parameter_dtypes": parameter_dtypes,
+        }
     for phase in phases:
         bundle_hashes = save_phase_bundle(
             args.output_dir,
