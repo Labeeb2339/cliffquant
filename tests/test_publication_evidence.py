@@ -200,6 +200,7 @@ def _write_hub_release_envelope(root: Path) -> None:
     assets = root / "assets"
     assets.mkdir()
     (root / "README.md").write_text("# Hub model card\n", encoding="utf-8")
+    (root / "LICENSE").write_text("Apache License 2.0\n", encoding="utf-8")
     (root / ".gitattributes").write_text("*.safetensors filter=lfs\n", encoding="utf-8")
     (assets / "proxy-policy-comparison.png").write_bytes(b"proxy-graph")
     (assets / "heldout-nll-comparison.png").write_bytes(b"nll-graph")
@@ -423,6 +424,21 @@ def test_checkpoint_identity_rejects_export_manifest_symlink_escape(tmp_path: Pa
         describe_exported_checkpoint(checkpoint)
 
 
+def test_checkpoint_identity_rejects_symlinked_payload_file(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "checkpoint"
+    _write_export(checkpoint)
+    model = checkpoint / "model.safetensors"
+    outside = tmp_path / "outside-model.safetensors"
+    model.replace(outside)
+    try:
+        model.symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"file symlinks are unavailable: {exc}")
+
+    with pytest.raises(ValueError, match="regular non-symlink file"):
+        describe_exported_checkpoint(checkpoint)
+
+
 def test_hub_release_envelope_preserves_immutable_payload_identity(tmp_path: Path) -> None:
     checkpoint = tmp_path / "checkpoint"
     _write_export(checkpoint)
@@ -494,7 +510,7 @@ def test_hub_release_rejects_symlinked_envelope_file(tmp_path: Path) -> None:
     except OSError as exc:
         pytest.skip(f"file symlinks are unavailable: {exc}")
 
-    with pytest.raises(ValueError, match="regular non-symlink files"):
+    with pytest.raises(ValueError, match="regular non-symlink file"):
         describe_exported_checkpoint(checkpoint, hub_release=True)
 
 

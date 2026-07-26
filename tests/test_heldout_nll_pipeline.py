@@ -392,6 +392,29 @@ def test_paired_nll_rejects_swapped_or_identical_checkpoint_identity(
         )
 
 
+def test_nll_export_identity_rejects_symlinked_payload_file(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "checkpoint"
+    _write_export_stub(
+        checkpoint,
+        policy="cliffquant_minimax",
+        scale_run_sha256="c" * 64,
+        model_payload=b"model",
+    )
+    model = checkpoint / "model.safetensors"
+    outside = tmp_path / "outside-model.safetensors"
+    model.replace(outside)
+    try:
+        model.symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"file symlinks are unavailable: {exc}")
+
+    with pytest.raises(ValueError, match="regular non-symlink files"):
+        heldout_nll._export_identity(
+            checkpoint,
+            expected_policy="cliffquant_minimax",
+        )
+
+
 def test_paired_nll_rejects_relabelled_identical_model_payloads(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

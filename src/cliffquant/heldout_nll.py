@@ -6,6 +6,7 @@ import gc
 import json
 import os
 import re
+import stat
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -157,6 +158,31 @@ def _standard_gptq_config(root: Path) -> dict[str, Any]:
     }
 
 
+def _require_regular_checkpoint_file(root: Path, logical_name: str) -> Path:
+    candidate = root / logical_name
+    for parent in candidate.parents:
+        if parent == root:
+            break
+        if parent.is_symlink():
+            raise ValueError(
+                "export file descriptors must have regular non-symlink parents "
+                f"inside the checkpoint: {logical_name}"
+            )
+    try:
+        mode = candidate.lstat().st_mode
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"export file is missing: {logical_name}") from exc
+    if candidate.is_symlink() or not stat.S_ISREG(mode):
+        raise ValueError(
+            "export file descriptors must name regular non-symlink files "
+            f"inside the checkpoint: {logical_name}"
+        )
+    resolved = candidate.resolve(strict=True)
+    if root != resolved and root not in resolved.parents:
+        raise ValueError(f"export file descriptor escapes checkpoint: {logical_name}")
+    return resolved
+
+
 def _export_identity(
     root: Path,
     *,
@@ -233,11 +259,7 @@ def _export_identity(
         if descriptor["file"] in described_files:
             raise ValueError(f"duplicate export file descriptor: {descriptor['file']}")
         described_files.add(descriptor["file"])
-        candidate = (root / descriptor["file"]).resolve()
-        if candidate != root and root not in candidate.parents:
-            raise ValueError("export file descriptor escapes checkpoint")
-        if not candidate.is_file():
-            raise FileNotFoundError(f"export file is missing: {descriptor['file']}")
+        candidate = _require_regular_checkpoint_file(root, descriptor["file"])
         if sha256_file(candidate) != descriptor.get("sha256"):
             raise ValueError(f"export file hash mismatch: {descriptor['file']}")
         if candidate.stat().st_size != descriptor.get("size_bytes"):

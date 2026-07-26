@@ -61,6 +61,7 @@ CLEAN_BUILD_SOURCE_SCHEMA = "cliffquant.clean-build-source.v1"
 VERIFICATION_LOCK_SHA256 = "7306bc57d022196092ae878fbad343f1c6dc7473ac9e3a461a995e0f64d6f4fe"
 HUB_RELEASE_ENVELOPE_FILES = (
     "README.md",
+    "LICENSE",
     ".gitattributes",
     "assets/proxy-policy-comparison.png",
     "assets/heldout-nll-comparison.png",
@@ -739,31 +740,47 @@ def _numpy(tensor: Any, *, float64: bool = False) -> NDArray[np.generic]:
     return np.ascontiguousarray(value.numpy())
 
 
+def _require_regular_checkpoint_file(
+    checkpoint: Path,
+    logical_name: str,
+    *,
+    label: str,
+) -> Path:
+    candidate = checkpoint / logical_name
+    for parent in candidate.parents:
+        if parent == checkpoint:
+            break
+        if parent.is_symlink():
+            raise ValueError(
+                f"{label} must have regular non-symlink parents inside the checkpoint: "
+                f"{logical_name}"
+            )
+    try:
+        mode = candidate.lstat().st_mode
+    except FileNotFoundError as exc:
+        raise FileNotFoundError(f"{label} is missing: {logical_name}") from exc
+    if candidate.is_symlink() or not stat.S_ISREG(mode):
+        raise ValueError(
+            f"{label} must be a regular non-symlink file inside the checkpoint: {logical_name}"
+        )
+    resolved = candidate.resolve(strict=True)
+    if checkpoint != resolved and checkpoint not in resolved.parents:
+        raise ValueError(f"{label} escapes checkpoint: {logical_name}")
+    return resolved
+
+
 def _validate_hub_release_envelope(checkpoint: Path) -> dict[str, Any]:
     for logical_name in HUB_RELEASE_ENVELOPE_FILES:
-        candidate = checkpoint / logical_name
-        for parent in candidate.parents:
-            if parent == checkpoint:
-                break
-            if parent.is_symlink():
-                raise ValueError(
-                    "Hub publication envelope paths must have regular non-symlink parents "
-                    f"inside the checkpoint: {logical_name}"
-                )
         try:
-            mode = candidate.lstat().st_mode
+            _require_regular_checkpoint_file(
+                checkpoint,
+                logical_name,
+                label="Hub publication envelope file",
+            )
         except FileNotFoundError as exc:
             raise FileNotFoundError(
                 f"required Hub publication envelope file is missing: {logical_name}"
             ) from exc
-        if candidate.is_symlink() or not stat.S_ISREG(mode):
-            raise ValueError(
-                "Hub publication envelope files must be regular non-symlink files "
-                f"inside the checkpoint: {logical_name}"
-            )
-        resolved = candidate.resolve(strict=True)
-        if checkpoint != resolved and checkpoint not in resolved.parents:
-            raise ValueError(f"Hub publication envelope file escapes checkpoint: {logical_name}")
     return {
         "files": list(HUB_RELEASE_ENVELOPE_FILES),
         "identity_scope": "model-payload-only",
@@ -834,11 +851,11 @@ def _verify_export_manifest(
         if descriptor["file"] in described_files:
             raise ValueError(f"duplicate export file descriptor: {descriptor['file']}")
         described_files.add(descriptor["file"])
-        candidate = (checkpoint / descriptor["file"]).resolve()
-        if checkpoint != candidate and checkpoint not in candidate.parents:
-            raise ValueError("export manifest file escapes checkpoint")
-        if not candidate.is_file():
-            raise FileNotFoundError(f"export file is missing: {descriptor['file']}")
+        candidate = _require_regular_checkpoint_file(
+            checkpoint,
+            descriptor["file"],
+            label="export manifest payload file",
+        )
         if sha256_file(candidate) != descriptor.get("sha256"):
             raise ValueError(f"export file hash mismatch: {candidate}")
         if candidate.stat().st_size != descriptor.get("size_bytes"):

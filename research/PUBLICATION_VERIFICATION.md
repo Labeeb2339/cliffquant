@@ -102,6 +102,7 @@ unchanged when preparing the Hugging Face repository.
 Hub staging has one explicit opt-in envelope:
 
 - `README.md`;
+- `LICENSE`;
 - `.gitattributes`;
 - `assets/proxy-policy-comparison.png`; and
 - `assets/heldout-nll-comparison.png`.
@@ -123,8 +124,8 @@ python scripts/verify_full_model_gptq.py report `
 The Hub result is labelled `model-payload-verified`. The verifier still hashes
 and validates every model-payload byte against the immutable checkpoint
 identity, but it validates publication-envelope paths and file types only.
-README, `.gitattributes`, and graph bytes are deliberately not part of the
-model-payload identity and are not claimed as byte-verified metadata.
+README, license, `.gitattributes`, and graph bytes are deliberately not part of
+the model-payload identity and are not claimed as byte-verified metadata.
 
 The disposable work directory is intentionally retained after the run for
 diagnosis. It is not publication evidence; only the canonical reports in the
