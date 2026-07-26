@@ -5,7 +5,8 @@ Status: frozen before collecting Qwen activation statistics or comparing policie
 Addendum 001-A was frozen after implementing the first loader, but before any
 real corpus or model collection. Addendum 001-B was then frozen after that
 backend failed its usability diagnostic. Addendum 001-C freezes the paired
-bootstrap arithmetic. All three addenda were frozen before accepting any real
+bootstrap arithmetic, and Addendum 001-D clarifies AbsMax terminology without
+changing its arithmetic. All four addenda were frozen before accepting any real
 model, policy, or outcome data.
 
 ## Question
@@ -166,7 +167,7 @@ are not changed between policies.
 
 ## Frozen policies
 
-1. **AbsMax**: the smallest no-clipping scale,
+1. **AbsMax**: the range-derived real-valued no-clipping target,
    `max(max(w_pos)/7, max(abs(w_neg))/8)`, rounded to the nearest positive
    finite FP16 value with the lower bit pattern winning a distance tie.
 2. **Pooled-WMSE**: exact scale selection after averaging the four normalized
@@ -219,6 +220,15 @@ seed `2340`. The 2.5th and 97.5th percentiles use NumPy's linear quantile method
 The reported paired point estimate is the same fixed-module macro mean before
 resampling. Exact zero differences are ties and are excluded from both the win
 and loss counts.
+
+## Addendum 001-D: AbsMax terminology
+
+This clarification was frozen on 2026-07-26 before running any real policy
+comparison. It does not change the formula or rounding rule above. Rounding the
+real-valued target to the nearest FP16 value can choose the lower neighbor, so
+the stored scale can technically clip an extreme code. Public artifacts call
+this the **range-derived AbsMax** baseline rather than claiming that every stored
+scale is strictly no-clipping.
 
 ## Gates
 
