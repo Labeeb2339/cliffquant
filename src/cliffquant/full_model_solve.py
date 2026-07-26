@@ -37,6 +37,7 @@ from .full_model_artifacts import (
     SafetensorsWeightSource,
     WeightSource,
     load_calibration_diagonals,
+    load_scale_run,
     validate_corpus_replay_pair,
     verify_frozen_corpus_pair,
 )
@@ -501,6 +502,86 @@ def _progress_payload(
     }
 
 
+def _reuse_completed_run(
+    root: Path,
+    *,
+    source: WeightSource,
+    calibration: CalibrationDiagonals,
+    modules: Sequence[FrozenModuleSpec],
+    corpus_replay: Mapping[str, Any] | None,
+    base_fingerprint: str,
+    policy: str,
+    engine_identity: Mapping[str, Any],
+    row_chunk_size: int,
+    solver_chunk_size: int,
+) -> dict[str, Any] | None:
+    """Return an equivalent completed run without rewriting immutable evidence."""
+
+    manifest_path = root / "scale-run.json"
+    if not manifest_path.exists():
+        return None
+
+    completed = load_scale_run(manifest_path, strict_inventory=False)
+    expected_calibration = {
+        "archive_file": calibration.archive_path.name,
+        "archive_sha256": calibration.archive_sha256,
+        "environments": list(calibration.environments),
+        "metadata_file": calibration.metadata_path.name,
+        "metadata_sha256": calibration.metadata_sha256,
+        "source": dict(calibration.source or {}),
+    }
+    mismatches: list[str] = []
+    if completed.policy != policy:
+        mismatches.append("policy")
+    if completed.modules != tuple(modules):
+        mismatches.append("module inventory")
+    if completed.metadata.get("base_fingerprint") != base_fingerprint:
+        mismatches.append("base fingerprint")
+    if completed.metadata.get("base_model", {}).get("source") != dict(source.provenance):
+        mismatches.append("base source")
+    if completed.metadata.get("calibration") != expected_calibration:
+        mismatches.append("calibration")
+    if completed.metadata.get("corpus_replay") != corpus_replay:
+        mismatches.append("corpus replay")
+    if completed.metadata.get("engine") != dict(engine_identity):
+        mismatches.append("engine identity")
+    if mismatches:
+        raise ValueError("completed scale run input drift: " + ", ".join(mismatches))
+
+    for module in modules:
+        module_dir = root / "modules" / _module_slug(module.name)
+        bounds = [
+            (start, min(start + row_chunk_size, module.out_features))
+            for start in range(0, module.out_features, row_chunk_size)
+        ]
+        _reject_stale_chunk_inventory(module_dir, bounds)
+        for start, stop in bounds:
+            task = _task_for(
+                source,
+                calibration,
+                module,
+                start,
+                stop,
+                solver_chunk_size=solver_chunk_size,
+                base_fingerprint=base_fingerprint,
+                policy=policy,
+                engine_identity=engine_identity,
+            )
+            chunk = _load_chunk(
+                module_dir,
+                module_name=module.name,
+                row_start=start,
+                row_stop=stop,
+                expected_input=task.input_identity,
+            )
+            if chunk is None:
+                raise ValueError(
+                    f"completed scale run is missing chunk checkpoint for "
+                    f"{module.name} rows {start}:{stop}"
+                )
+    return completed.metadata
+
+
 def _combine_counter(target: Counter[str], value: Mapping[str, Any], field: str) -> None:
     nested = value.get(field, {})
     if isinstance(nested, Mapping):
@@ -682,6 +763,21 @@ def solve_modules_to_artifacts(
             raise KeyError(f"pinned base checkpoint is missing {module.weight_key}")
         if source.shape(module.weight_key) != (module.out_features, module.in_features):
             raise ValueError(f"base tensor shape drift for {module.weight_key}")
+
+    completed_run = _reuse_completed_run(
+        root,
+        source=source,
+        calibration=calibration,
+        modules=selected,
+        corpus_replay=corpus_replay,
+        base_fingerprint=base_fingerprint,
+        policy=policy,
+        engine_identity=engine_identity,
+        row_chunk_size=row_chunk_size,
+        solver_chunk_size=solver_chunk_size,
+    )
+    if completed_run is not None:
+        return completed_run
 
     chunk_bounds = {
         module.name: [

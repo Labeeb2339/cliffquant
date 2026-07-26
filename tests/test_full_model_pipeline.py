@@ -210,9 +210,11 @@ def test_scale_pipeline_resumes_and_canonicalizes_all_zero_export_scale(
         workers=1,
         engine_identity=_test_engine_identity(),
     )
+    first_manifest_bytes = (output / "scale-run.json").read_bytes()
+    first_manifest_sha256 = sha256_file(output / "scale-run.json")
     first = load_scale_run(output, strict_inventory=False)
     # A second run must validate and reuse every row checkpoint.
-    solve_modules_to_artifacts(
+    resumed = solve_modules_to_artifacts(
         output,
         source=source,
         calibration=calibration,
@@ -223,6 +225,9 @@ def test_scale_pipeline_resumes_and_canonicalizes_all_zero_export_scale(
     )
     second = load_scale_run(output, strict_inventory=False)
 
+    assert (output / "scale-run.json").read_bytes() == first_manifest_bytes
+    assert sha256_file(output / "scale-run.json") == first_manifest_sha256
+    assert resumed == json.loads(first_manifest_bytes)
     np.testing.assert_array_equal(
         first.artifacts[module.name].scale_bits,
         second.artifacts[module.name].scale_bits,
