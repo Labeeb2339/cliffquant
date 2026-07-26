@@ -11,6 +11,8 @@ import sys
 import time
 import uuid
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Protocol, TextIO
 from urllib.parse import quote, urlencode, urljoin, urlsplit
@@ -63,10 +65,34 @@ class DatasetViewerCacheError(DatasetViewerError):
 
 
 class _HTTPStatusError(OSError):
-    def __init__(self, status: int, url: str) -> None:
+    def __init__(
+        self,
+        status: int,
+        url: str,
+        *,
+        retry_after_seconds: float | None,
+    ) -> None:
         super().__init__(f"HTTP {status} for {url}")
         self.status = status
         self.retryable = status in {408, 425, 429} or 500 <= status < 600
+        self.retry_after_seconds = retry_after_seconds
+
+
+def _retry_after_seconds(value: str | None, *, status: int) -> float | None:
+    if value is not None:
+        try:
+            seconds = float(value)
+        except ValueError:
+            try:
+                when = parsedate_to_datetime(value)
+                if when.tzinfo is None:
+                    when = when.replace(tzinfo=UTC)
+                seconds = (when - datetime.now(UTC)).total_seconds()
+            except (TypeError, ValueError, OverflowError):
+                seconds = -1.0
+        if 0.0 <= seconds <= 300.0:
+            return seconds
+    return 30.0 if status == 429 else None
 
 
 def _http_get_bytes(
@@ -122,7 +148,14 @@ def _http_get_bytes(
                 redirects_remaining=redirects_remaining - 1,
             )
         if response.status != 200:
-            raise _HTTPStatusError(response.status, url)
+            raise _HTTPStatusError(
+                response.status,
+                url,
+                retry_after_seconds=_retry_after_seconds(
+                    response.getheader("Retry-After"),
+                    status=response.status,
+                ),
+            )
         return body
     finally:
         connection.close()
@@ -154,6 +187,7 @@ def _request_json(
 ) -> Mapping[str, Any]:
     last_error: BaseException | None = None
     for attempt in range(max_retries + 1):
+        retry_delay = retry_backoff * (2**attempt)
         try:
             payload = http_get(
                 url,
@@ -167,17 +201,19 @@ def _request_json(
             if not exc.retryable:
                 raise DatasetViewerError(str(exc)) from exc
             last_error = exc
+            if exc.retry_after_seconds is not None:
+                retry_delay = max(retry_delay, exc.retry_after_seconds)
         except (DatasetViewerError, OSError, TimeoutError) as exc:
             last_error = exc
         if attempt == max_retries:
             break
         print(
-            f"[cliffquant] retry {attempt + 1}/{max_retries}: {label}",
+            f"[cliffquant] retry {attempt + 1}/{max_retries} after {retry_delay:g}s: {label}",
             file=progress,
             flush=True,
         )
-        if retry_backoff:
-            time.sleep(retry_backoff * (2**attempt))
+        if retry_delay:
+            time.sleep(retry_delay)
     raise DatasetViewerError(f"{label} failed after {max_retries + 1} attempts") from last_error
 
 

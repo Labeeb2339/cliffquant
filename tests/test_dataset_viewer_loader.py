@@ -15,6 +15,8 @@ from cliffquant.dataset_viewer import (
     DatasetRevisionDriftError,
     DatasetViewerCacheError,
     DatasetViewerError,
+    _HTTPStatusError,
+    _request_json,
     _validated_page_rows,
 )
 from cliffquant.provenance import canonical_json_bytes, sha256_bytes
@@ -186,6 +188,35 @@ def test_viewer_loader_stops_after_the_bounded_attempt_count(tmp_path: Path) -> 
             progress=StringIO(),
         )
     assert len(transport.row_calls) == 3
+
+
+def test_rate_limit_honors_retry_after(monkeypatch) -> None:
+    calls = 0
+    delays: list[float] = []
+
+    def transport(url: str, *, connect_timeout: float, read_timeout: float) -> bytes:
+        nonlocal calls
+        del url, connect_timeout, read_timeout
+        calls += 1
+        if calls == 1:
+            raise _HTTPStatusError(429, "https://example.test", retry_after_seconds=17.0)
+        return canonical_json_bytes({"ok": True})
+
+    monkeypatch.setattr("cliffquant.dataset_viewer.time.sleep", delays.append)
+    result = _request_json(
+        "https://example.test",
+        http_get=transport,
+        connect_timeout=1.0,
+        read_timeout=1.0,
+        max_retries=1,
+        retry_backoff=0.5,
+        progress=StringIO(),
+        label="rate-limited fixture",
+    )
+
+    assert result == {"ok": True}
+    assert calls == 2
+    assert delays == [17.0]
 
 
 def test_revision_drift_refuses_cached_rows_before_viewer_access(tmp_path: Path) -> None:
