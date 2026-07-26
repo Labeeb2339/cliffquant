@@ -1,6 +1,7 @@
 # Prior-art boundary
 
-This is a bounded collision audit, not a proof of novelty.
+This is a bounded primary-source and public-code collision audit through
+2026-07-26, not a proof of novelty.
 
 The closest work I found is
 [PiSO](https://arxiv.org/abs/2606.10890), which already gives an exact
@@ -17,6 +18,11 @@ Other close references include:
   curvature and iterative weighted least squares;
 - [ScaleSweep](https://arxiv.org/abs/2606.07618), which searches target-format
   block scales for NVFP4;
+- [ScaleSearch](https://arxiv.org/abs/2605.12464), which searches representable
+  microscaling values for NVFP4;
+- [Optimal Quantization Using Scaled Codebook](https://research.nvidia.com/publication/2021-06_optimal-quantization-using-scaled-codebook),
+  which globally optimizes a continuous scale and assignments for a fixed
+  codebook under ordinary squared error;
 - [GPTQ](https://arxiv.org/abs/2210.17323), which uses second-order calibration
   and sequential error compensation;
 - [AWQ](https://arxiv.org/abs/2306.00978), which protects activation-salient
@@ -27,10 +33,25 @@ Other close references include:
   equivalent transformations;
 - [HQQ](https://github.com/dropbox/hqq), which optimizes groupwise scale and
   zero-point without calibration data;
+- [MaCa](https://arxiv.org/abs/2602.07465), which separately normalizes sequence
+  covariance estimates before averaging them into one calibration objective;
+- [MixCal](https://arxiv.org/abs/2502.18424), which mixes generic and
+  domain-specific calibration objectives through a weighted aggregate;
+- [FairQuant](https://arxiv.org/abs/2602.23192), whose balanced reducer
+  normalizes sensitive-group importance and takes a maximum for mixed-bit
+  allocation and quantization-aware training;
+- [C-PTQ](https://arxiv.org/abs/2607.21076), which mean-normalizes diagonal
+  Fisher weights and searches channel-smoothing parameters against one
+  aggregated calibration objective;
 - [the worst-case PTQ benchmark](https://arxiv.org/abs/2303.13003), which makes
   distribution-shift reliability an explicit PTQ concern; and
 - [the calibration-data study](https://arxiv.org/abs/2311.09755), which shows
   that PTQ quality can vary substantially with calibration data.
+
+Generic worst-group optimization also predates this work; for example,
+[Group DRO](https://arxiv.org/abs/1911.08731) optimizes worst-group loss under
+distribution shifts. CliffQuant therefore does not claim minimax or
+worst-group optimization itself as a new idea.
 
 ## Candidate distinction under test
 
@@ -45,13 +66,15 @@ proxy:
 No source in this bounded audit combined all of the following:
 
 - symmetric INT4 groupwise weights;
+- one positive finite IEEE binary16 stored scale per group;
 - separately normalized calibration environments retained as separate losses;
 - a maximum-over-environments diagonal objective; and
-- exact minimization over the permitted stored-scale set.
+- exact minimization over the permitted stored-scale set, with an exhaustive
+  reference and a breakpoint-derived sufficient candidate set.
 
-That absence is not proof that the combination is novel. Until a wider
-literature review and external review are complete, the safe description is
-“candidate distinction” rather than “first,” “novel,” or “breakthrough.”
+That absence is not proof that the combination is novel. The safe description
+is "a candidate implementation distinction found in a bounded audit," not
+"first," "novel," or "breakthrough."
 
 ## Claims excluded by this audit
 

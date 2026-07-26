@@ -2,13 +2,14 @@
 
 ## Current claim
 
-For each supplied group, CliffQuant evaluates every positive finite IEEE binary16
-stored scale and returns the scale with the lowest computed frozen
-multi-environment diagonal reconstruction objective. Exact floating-point ties are
-resolved by the lower FP16 bit pattern.
+For each supplied group, CliffQuant is specified to minimize over every positive
+finite IEEE binary16 stored scale. The production solver evaluates an
+analytically sufficient candidate set and returns the scale with the lowest
+computed frozen multi-environment diagonal reconstruction objective. Exact
+floating-point ties are resolved by the lower FP16 bit pattern.
 
-The implementation is tested against an independent pure-Python oracle that also
-enumerates all 31,743 scales.
+The implementation is tested against an independent pure-Python oracle that
+enumerates all 31,743 permitted scales.
 
 ## Fixed scope
 
