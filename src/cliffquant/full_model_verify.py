@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,7 @@ from .gptqmodel_export import (
 from .model_snapshot import validate_model_snapshot_descriptor
 from .provenance import (
     canonical_json_bytes,
+    runtime_metadata,
     sha256_bytes,
     sha256_file,
 )
@@ -47,7 +49,524 @@ from .qwen35_modules import (
     QWEN35_GPTQMODEL_TREE_REVISION,
 )
 
-VERIFICATION_SCHEMA = "cliffquant.gptq-verification.v1"
+VERIFICATION_SCHEMA = "cliffquant.gptq-verification.v2"
+RUNTIME_VERIFICATION_SCHEMA = "cliffquant.gptq-runtime-verification.v1"
+CHECKPOINT_IDENTITY_SCHEMA = "cliffquant.gptq-checkpoint-identity.v1"
+VERIFICATION_SIDECAR_SCHEMA = "cliffquant.verification-report-sidecar.v1"
+VERIFIER_IDENTITY_SCHEMA = "cliffquant.verifier-identity.v1"
+CLEAN_ENVIRONMENT_SCHEMA = "cliffquant.clean-verification-environment.v1"
+CLEAN_BUILD_SOURCE_SCHEMA = "cliffquant.clean-build-source.v1"
+VERIFICATION_LOCK_SHA256 = "7306bc57d022196092ae878fbad343f1c6dc7473ac9e3a461a995e0f64d6f4fe"
+
+_VERIFIER_SOURCES = (
+    "full_model_artifacts.py",
+    "full_model_verify.py",
+    "gptq_pack.py",
+    "gptqmodel_export.py",
+    "model_snapshot.py",
+    "provenance.py",
+    "qwen35_modules.py",
+)
+
+_RUNTIME_PACKAGES = (
+    "accelerate",
+    "datasets",
+    "gptqmodel",
+    "huggingface-hub",
+    "numpy",
+    "pillow",
+    "safetensors",
+    "tokenizers",
+    "torch",
+    "torchao",
+    "torchvision",
+    "transformers",
+)
+
+_AUXILIARY_FILES = (
+    "chat_template.json",
+    "chat_template.jinja",
+    "merges.txt",
+    "preprocessor_config.json",
+    "processor_config.json",
+    "special_tokens_map.json",
+    "tokenizer.json",
+    "tokenizer.model",
+    "tokenizer_config.json",
+    "video_preprocessor_config.json",
+    "vocab.json",
+)
+
+_FROZEN_VERIFICATION_REQUIREMENTS = (
+    "accelerate==1.14.0",
+    "aiohappyeyeballs==2.7.1",
+    "aiohttp==3.14.3",
+    "aiosignal==1.4.0",
+    "annotated-doc==0.0.4",
+    "anyio==4.14.2",
+    "attrs==26.1.0",
+    "certifi==2026.7.22",
+    "charset-normalizer==3.4.9",
+    "click==8.4.2",
+    "colorama==0.4.6",
+    "datasets==5.0.0",
+    "Defuser==0.0.24",
+    "Device-SMI==0.5.6",
+    "dill==0.4.1",
+    "filelock==3.32.0",
+    "frozenlist==1.8.0",
+    "fsspec==2026.4.0",
+    "h11==0.16.0",
+    "hf-xet==1.5.2",
+    "httpcore==1.0.9",
+    "httpx==0.28.1",
+    "huggingface_hub==1.24.0",
+    "idna==3.18",
+    "Jinja2==3.1.6",
+    "LogBar==0.4.4",
+    "markdown-it-py==4.2.0",
+    "MarkupSafe==3.0.3",
+    "maturin==1.14.1",
+    "mdurl==0.1.2",
+    "mpmath==1.3.0",
+    "multidict==6.7.1",
+    "multiprocess==0.70.19",
+    "networkx==3.6.1",
+    "ninja==1.13.0",
+    "numpy==2.2.6",
+    "packaging==26.2",
+    "pandas==3.0.5",
+    "pillow==12.3.0",
+    "propcache==0.5.2",
+    "protobuf==7.35.1",
+    "psutil==7.2.2",
+    "pyarrow==25.0.0",
+    "Pygments==2.20.0",
+    "PyPcre==0.4.0",
+    "python-dateutil==2.9.0.post0",
+    "PyYAML==6.0.3",
+    "regex==2026.7.19",
+    "requests==2.34.2",
+    "rich==15.0.0",
+    "safetensors==0.8.0",
+    "shellingham==1.5.4",
+    "six==1.17.0",
+    "sympy==1.14.0",
+    "threadpoolctl==3.6.0",
+    "TokeNicer==0.0.14",
+    "tokenizers==0.22.2",
+    "torch==2.11.0+cu128",
+    "torchao==0.17.0",
+    "torchvision==0.26.0+cu128",
+    "tqdm==4.69.1",
+    "transformers==5.14.1",
+    "typer==0.27.0",
+    "typing_extensions==4.16.0",
+    "tzdata==2026.3",
+    "urllib3==2.7.0",
+    "xxhash==3.8.1",
+    "yarl==1.24.5",
+)
+
+
+def _is_sha256(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
+    )
+
+
+def _file_descriptor(path: Path, *, logical_name: str | None = None) -> dict[str, Any]:
+    if not path.is_file():
+        raise FileNotFoundError(f"verification evidence file does not exist: {path}")
+    return {
+        "file": logical_name or path.name,
+        "sha256": sha256_file(path),
+        "size_bytes": path.stat().st_size,
+    }
+
+
+def _validate_file_descriptor(value: Any, *, label: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != {"file", "sha256", "size_bytes"}:
+        raise ValueError(f"{label} descriptor fields drift")
+    name = value["file"]
+    relative = Path(name) if isinstance(name, str) else None
+    if (
+        not isinstance(name, str)
+        or not name
+        or relative is None
+        or relative.is_absolute()
+        or relative.drive
+        or name != relative.as_posix()
+        or not relative.parts
+        or any(part in {"", ".", ".."} for part in relative.parts)
+    ):
+        raise ValueError(f"{label} descriptor path drift")
+    if not _is_sha256(value["sha256"]):
+        raise ValueError(f"{label} descriptor hash drift")
+    if type(value["size_bytes"]) is not int or value["size_bytes"] < 0:
+        raise ValueError(f"{label} descriptor size drift")
+    return dict(value)
+
+
+def _validate_descriptor_list(value: Any, *, label: str) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"{label} descriptor list is empty")
+    descriptors = [
+        _validate_file_descriptor(descriptor, label=f"{label} file") for descriptor in value
+    ]
+    names = [descriptor["file"] for descriptor in descriptors]
+    if names != sorted(names) or len(names) != len(set(names)):
+        raise ValueError(f"{label} descriptor list is not unique and canonical")
+    return descriptors
+
+
+def _package_inventory(lines: Any, *, label: str) -> dict[str, str]:
+    if not isinstance(lines, (list, tuple)) or not lines:
+        raise ValueError(f"{label} package inventory is empty")
+    inventory: dict[str, str] = {}
+    for item in lines:
+        if (
+            not isinstance(item, str)
+            or item.count("==") != 1
+            or " @ " in item
+            or item.startswith("-e ")
+        ):
+            raise ValueError(f"{label} package is not exactly version-pinned: {item!r}")
+        name, version = item.split("==", 1)
+        normalized = re.sub(r"[-_.]+", "-", name).casefold()
+        if not normalized or not version or normalized in inventory:
+            raise ValueError(f"{label} package inventory has a duplicate or invalid item: {item!r}")
+        inventory[normalized] = version
+    return inventory
+
+
+def _expected_clean_environment_packages() -> dict[str, str]:
+    expected = _package_inventory(
+        _FROZEN_VERIFICATION_REQUIREMENTS,
+        label="frozen verification lock",
+    )
+    expected.update(
+        {
+            "cliffquant": "0.1.0",
+            "gptqmodel": "7.3.4",
+            "pip": "26.1.2",
+            "setuptools": "81.0.0",
+            "wheel": "0.47.0",
+        }
+    )
+    return expected
+
+
+def _verifier_identity() -> dict[str, Any]:
+    package_root = Path(__file__).resolve().parent
+    files = [
+        _file_descriptor(package_root / name, logical_name=f"cliffquant/{name}")
+        for name in _VERIFIER_SOURCES
+    ]
+    payload = {
+        "files": files,
+        "schema": VERIFIER_IDENTITY_SCHEMA,
+    }
+    return {
+        **payload,
+        "sha256": sha256_bytes(canonical_json_bytes(payload)),
+    }
+
+
+def _validate_verifier_identity(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != {"files", "schema", "sha256"}:
+        raise ValueError("verifier identity fields drift")
+    if value["schema"] != VERIFIER_IDENTITY_SCHEMA:
+        raise ValueError("verifier identity schema drift")
+    files = value["files"]
+    if not isinstance(files, list) or len(files) != len(_VERIFIER_SOURCES):
+        raise ValueError("verifier source coverage drift")
+    validated = [
+        _validate_file_descriptor(descriptor, label="verifier source") for descriptor in files
+    ]
+    names = [descriptor["file"] for descriptor in validated]
+    expected_names = [f"cliffquant/{name}" for name in _VERIFIER_SOURCES]
+    if names != expected_names:
+        raise ValueError("verifier source order drift")
+    payload = {"files": validated, "schema": VERIFIER_IDENTITY_SCHEMA}
+    if value["sha256"] != sha256_bytes(canonical_json_bytes(payload)):
+        raise ValueError("verifier source fingerprint mismatch")
+    return json.loads(canonical_json_bytes(dict(value)))
+
+
+def _verification_runtime(device: str) -> dict[str, Any]:
+    return runtime_metadata(
+        device=device,
+        package_names=(
+            "accelerate",
+            "datasets",
+            "gptqmodel",
+            "huggingface-hub",
+            "numpy",
+            "pillow",
+            "safetensors",
+            "tokenizers",
+            "torch",
+            "torchao",
+            "torchvision",
+            "transformers",
+        ),
+    )
+
+
+def _sidecar_path(report_path: Path) -> Path:
+    return report_path.with_name(f"{report_path.stem}.sha256.json")
+
+
+def _write_canonical_report(report: Mapping[str, Any], report_path: str | Path) -> None:
+    destination = Path(report_path).resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    payload = canonical_json_bytes(dict(report))
+    descriptor = {
+        "file": destination.name,
+        "sha256": sha256_bytes(payload),
+        "size_bytes": len(payload),
+    }
+    sidecar = {
+        "report": descriptor,
+        "schema": VERIFICATION_SIDECAR_SCHEMA,
+    }
+    sidecar_payload = canonical_json_bytes(sidecar)
+    sidecar_path = _sidecar_path(destination)
+    for path, expected in ((destination, payload), (sidecar_path, sidecar_payload)):
+        if path.exists() and path.read_bytes() != expected:
+            raise FileExistsError(f"refusing to overwrite different verification evidence: {path}")
+        if not path.exists():
+            path.write_bytes(expected)
+
+
+def _load_canonical_report(path: str | Path, *, expected_schema: str) -> dict[str, Any]:
+    report_path = Path(path).resolve()
+    payload = report_path.read_bytes()
+    report = json.loads(payload)
+    if not isinstance(report, dict) or report.get("schema") != expected_schema:
+        raise ValueError(f"unsupported verification report schema: {report_path}")
+    if payload != canonical_json_bytes(report):
+        raise ValueError(f"verification report is not canonical JSON: {report_path}")
+    sidecar_path = _sidecar_path(report_path)
+    sidecar_payload = sidecar_path.read_bytes()
+    sidecar = json.loads(sidecar_payload)
+    expected_sidecar = {
+        "report": {
+            "file": report_path.name,
+            "sha256": sha256_bytes(payload),
+            "size_bytes": len(payload),
+        },
+        "schema": VERIFICATION_SIDECAR_SCHEMA,
+    }
+    if sidecar != expected_sidecar or sidecar_payload != canonical_json_bytes(sidecar):
+        raise ValueError(f"verification report sidecar mismatch: {sidecar_path}")
+    return report
+
+
+def _is_git_object_id(value: Any) -> bool:
+    return (
+        isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", value) is not None
+    )
+
+
+def validate_clean_build_source_identity(value: Any) -> dict[str, Any]:
+    """Validate the complete path-free source and wheel provenance report."""
+
+    fields = {"cliffquant", "dependencies", "gptqmodel", "schema", "sha256"}
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise ValueError("clean-build source report fields drift")
+    report = dict(value)
+    if report["schema"] != CLEAN_BUILD_SOURCE_SCHEMA:
+        raise ValueError("clean-build source schema drift")
+
+    cliffquant = report["cliffquant"]
+    if not isinstance(cliffquant, Mapping) or set(cliffquant) != {
+        "commit",
+        "tree",
+        "wheel",
+    }:
+        raise ValueError("CliffQuant clean-build source fields drift")
+    if not _is_git_object_id(cliffquant["commit"]) or not _is_git_object_id(cliffquant["tree"]):
+        raise ValueError("CliffQuant clean-build Git identity drift")
+    cliffquant_wheel = _validate_file_descriptor(
+        cliffquant["wheel"],
+        label="CliffQuant clean-build wheel",
+    )
+    cliffquant_wheel_name = cliffquant_wheel["file"].casefold()
+    if (
+        (
+            cliffquant_wheel_name != "cliffquant-0.1.0.whl"
+            and not cliffquant_wheel_name.startswith("cliffquant-0.1.0-")
+        )
+        or not cliffquant_wheel_name.endswith(".whl")
+        or cliffquant_wheel["size_bytes"] <= 0
+    ):
+        raise ValueError("CliffQuant clean-build wheel identity drift")
+
+    gptqmodel = report["gptqmodel"]
+    if not isinstance(gptqmodel, Mapping) or set(gptqmodel) != {
+        "commit",
+        "repository",
+        "tree",
+        "wheel",
+    }:
+        raise ValueError("GPTQModel clean-build source fields drift")
+    if (
+        gptqmodel["repository"] != "https://github.com/ModelCloud/GPTQModel.git"
+        or gptqmodel["commit"] != QWEN35_GPTQMODEL_TREE_REVISION
+        or not _is_git_object_id(gptqmodel["tree"])
+    ):
+        raise ValueError("GPTQModel clean-build source identity drift")
+    gptqmodel_wheel = _validate_file_descriptor(
+        gptqmodel["wheel"],
+        label="GPTQModel clean-build wheel",
+    )
+    gptqmodel_wheel_name = gptqmodel_wheel["file"].casefold()
+    if (
+        (
+            gptqmodel_wheel_name != "gptqmodel-7.3.4.whl"
+            and not gptqmodel_wheel_name.startswith("gptqmodel-7.3.4-")
+        )
+        or not gptqmodel_wheel_name.endswith(".whl")
+        or gptqmodel_wheel["size_bytes"] <= 0
+    ):
+        raise ValueError("GPTQModel clean-build wheel identity drift")
+
+    dependencies = report["dependencies"]
+    dependency_fields = {"files", "hashed_lock", "mode", "sha256"}
+    if not isinstance(dependencies, Mapping) or set(dependencies) != dependency_fields:
+        raise ValueError("clean-build dependency identity fields drift")
+    if dependencies["mode"] != "hashed-wheelhouse":
+        raise ValueError("clean-build dependencies are not a hashed wheelhouse")
+    hashed_lock = _validate_file_descriptor(
+        dependencies["hashed_lock"],
+        label="clean-build hashed lock",
+    )
+    lock_path = Path(hashed_lock["file"])
+    if (
+        lock_path.parts[0] != "requirements"
+        or lock_path.suffix.casefold() != ".txt"
+        or hashed_lock["size_bytes"] <= 0
+    ):
+        raise ValueError("clean-build hashed-lock identity drift")
+    raw_wheelhouse = dependencies["files"]
+    if not isinstance(raw_wheelhouse, list) or not raw_wheelhouse:
+        raise ValueError("clean-build wheelhouse descriptor list is empty")
+    wheelhouse = [
+        _validate_file_descriptor(descriptor, label="clean-build wheelhouse file")
+        for descriptor in raw_wheelhouse
+    ]
+    wheel_names = [descriptor["file"] for descriptor in wheelhouse]
+    if wheel_names != sorted(wheel_names, key=lambda name: (name.casefold(), name)) or len(
+        wheel_names
+    ) != len(set(wheel_names)):
+        raise ValueError("clean-build wheelhouse descriptor list is not unique and canonical")
+    if any(
+        not descriptor["file"].casefold().endswith(".whl") or descriptor["size_bytes"] <= 0
+        for descriptor in wheelhouse
+    ):
+        raise ValueError("clean-build wheelhouse descriptor drift")
+    dependency_payload = {
+        "files": wheelhouse,
+        "hashed_lock": hashed_lock,
+        "mode": "hashed-wheelhouse",
+    }
+    if dependencies["sha256"] != sha256_bytes(canonical_json_bytes(dependency_payload)):
+        raise ValueError("clean-build wheelhouse aggregate mismatch")
+
+    payload = {key: report[key] for key in fields if key != "sha256"}
+    if report["sha256"] != sha256_bytes(canonical_json_bytes(payload)):
+        raise ValueError("clean-build source report fingerprint mismatch")
+    return json.loads(canonical_json_bytes(report))
+
+
+def validate_clean_environment_identity(value: Any) -> dict[str, Any]:
+    """Validate the path-free contents of one clean-environment report."""
+
+    if not isinstance(value, Mapping):
+        raise ValueError("clean-environment report must be an object")
+    report = dict(value)
+    fields = {
+        "cliffquant_wheel",
+        "created_from_empty_directory",
+        "gptqmodel",
+        "gptqmodel_wheel",
+        "lock",
+        "packages",
+        "pip_check",
+        "python",
+        "schema",
+        "sha256",
+        "source_build",
+        "status",
+    }
+    if set(report) != fields:
+        raise ValueError("clean-environment report fields drift")
+    if report["created_from_empty_directory"] is not True or report["status"] != "pass":
+        raise ValueError("clean-environment creation did not pass")
+    for field in ("cliffquant_wheel", "gptqmodel_wheel", "lock"):
+        _validate_file_descriptor(report[field], label=field.replace("_", " "))
+    if (
+        report["lock"]["file"] != "requirements/verification-cu128.txt"
+        or report["lock"]["sha256"] != VERIFICATION_LOCK_SHA256
+    ):
+        raise ValueError("clean-environment lock identity drift")
+    gptqmodel = report["gptqmodel"]
+    if (
+        not isinstance(gptqmodel, Mapping)
+        or set(gptqmodel) != {"repository", "revision"}
+        or gptqmodel["repository"] != "https://github.com/ModelCloud/GPTQModel.git"
+        or gptqmodel["revision"] != QWEN35_GPTQMODEL_TREE_REVISION
+    ):
+        raise ValueError("clean-environment GPTQModel source drift")
+    source_build = validate_clean_build_source_identity(report["source_build"])
+    if (
+        report["cliffquant_wheel"] != source_build["cliffquant"]["wheel"]
+        or report["gptqmodel_wheel"] != source_build["gptqmodel"]["wheel"]
+        or gptqmodel["repository"] != source_build["gptqmodel"]["repository"]
+        or gptqmodel["revision"] != source_build["gptqmodel"]["commit"]
+    ):
+        raise ValueError("clean-environment source-build binding drift")
+    packages = report["packages"]
+    if not isinstance(packages, list) or packages != sorted(packages, key=str.casefold):
+        raise ValueError("clean-environment package lock drift")
+    if _package_inventory(packages, label="clean environment") != (
+        _expected_clean_environment_packages()
+    ):
+        raise ValueError("clean-environment package inventory differs from the frozen lock")
+    if report["pip_check"] != "No broken requirements found.":
+        raise ValueError("clean-environment pip check did not pass")
+    python = report["python"]
+    if (
+        not isinstance(python, Mapping)
+        or set(python) != {"implementation", "version"}
+        or python["implementation"] != "CPython"
+        or python["version"] != "3.11.15"
+    ):
+        raise ValueError("clean-environment Python runtime drift")
+    payload = {key: report[key] for key in fields if key != "sha256"}
+    if report["sha256"] != sha256_bytes(canonical_json_bytes(payload)):
+        raise ValueError("clean-environment report fingerprint mismatch")
+    return json.loads(canonical_json_bytes(report))
+
+
+def load_clean_environment_identity(path: str | Path) -> dict[str, Any]:
+    """Load a canonical clean-environment report and verify its self-identity."""
+
+    report = _load_canonical_report(path, expected_schema=CLEAN_ENVIRONMENT_SCHEMA)
+    return validate_clean_environment_identity(report)
+
+
+def _require_report_outside_checkpoint(
+    report_path: str | Path,
+    checkpoint_root: Path,
+) -> None:
+    destination = Path(report_path).resolve()
+    if destination == checkpoint_root or checkpoint_root in destination.parents:
+        raise ValueError("verification reports must be written outside the immutable checkpoint")
 
 
 class TensorCheckpoint:
@@ -213,7 +732,13 @@ def _numpy(tensor: Any, *, float64: bool = False) -> NDArray[np.generic]:
 
 
 def _verify_export_manifest(checkpoint: Path) -> dict[str, Any]:
-    path = checkpoint / "cliffquant_export.json"
+    checkpoint = checkpoint.resolve()
+    candidate_path = checkpoint / "cliffquant_export.json"
+    if candidate_path.is_symlink():
+        raise ValueError("export manifest must be a regular file inside the checkpoint")
+    path = candidate_path.resolve(strict=True)
+    if path.parent != checkpoint:
+        raise ValueError("export manifest escapes checkpoint")
     metadata = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(metadata, dict) or metadata.get("schema") != EXPORT_SCHEMA:
         raise ValueError("checkpoint lacks a supported CliffQuant export manifest")
@@ -309,22 +834,526 @@ def _verify_export_manifest(checkpoint: Path) -> dict[str, Any]:
     return metadata
 
 
-def _verify_auxiliary_files(base: Path, output: Path) -> list[dict[str, Any]]:
-    names = (
-        "chat_template.json",
-        "chat_template.jinja",
-        "merges.txt",
-        "preprocessor_config.json",
-        "processor_config.json",
-        "special_tokens_map.json",
-        "tokenizer.json",
-        "tokenizer.model",
-        "tokenizer_config.json",
-        "video_preprocessor_config.json",
-        "vocab.json",
+def _checkpoint_identity(
+    checkpoint: Path,
+    export_manifest: Mapping[str, Any],
+) -> dict[str, Any]:
+    base_model = export_manifest["base_model"]
+    base_source = validate_model_snapshot_descriptor(
+        base_model["source"],
+        model_id=BASE_MODEL_ID,
+        revision=BASE_MODEL_REVISION,
     )
+    corpus_replay = validate_corpus_replay_pair(export_manifest["corpus_replay"])
+    export_descriptor = _file_descriptor(
+        checkpoint / "cliffquant_export.json",
+        logical_name="cliffquant_export.json",
+    )
+    described_files = [
+        _validate_file_descriptor(value, label="checkpoint file")
+        for value in export_manifest["files"]
+    ]
+    described_files.sort(key=lambda value: value["file"])
+    all_files = [export_descriptor, *described_files]
+    scale_run = export_manifest["scale_run"]
+    payload = {
+        "base_model": {
+            "id": BASE_MODEL_ID,
+            "revision": BASE_MODEL_REVISION,
+            "source": base_source,
+        },
+        "checkpoint_files": all_files,
+        "checkpoint_files_sha256": sha256_bytes(canonical_json_bytes(all_files)),
+        "corpus_replay": corpus_replay,
+        "export_manifest": export_descriptor,
+        "gptq": dict(export_manifest["gptq"]),
+        "gptqmodel": dict(export_manifest["gptqmodel"]),
+        "policy": export_manifest["policy"],
+        "scale_run": {
+            "manifest_sha256": scale_run["manifest_sha256"],
+            "path": scale_run["path"],
+        },
+        "schema": CHECKPOINT_IDENTITY_SCHEMA,
+    }
+    return {
+        **payload,
+        "sha256": sha256_bytes(canonical_json_bytes(payload)),
+    }
+
+
+def validate_exported_checkpoint_identity(value: Any) -> dict[str, Any]:
+    """Validate a path-free identity for every byte in one exported checkpoint."""
+
+    fields = {
+        "base_model",
+        "checkpoint_files",
+        "checkpoint_files_sha256",
+        "corpus_replay",
+        "export_manifest",
+        "gptq",
+        "gptqmodel",
+        "policy",
+        "scale_run",
+        "schema",
+        "sha256",
+    }
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise ValueError("exported checkpoint identity fields drift")
+    if value["schema"] != CHECKPOINT_IDENTITY_SCHEMA:
+        raise ValueError("exported checkpoint identity schema drift")
+    base_model = value["base_model"]
+    if (
+        not isinstance(base_model, Mapping)
+        or set(base_model) != {"id", "revision", "source"}
+        or base_model["id"] != BASE_MODEL_ID
+        or base_model["revision"] != BASE_MODEL_REVISION
+    ):
+        raise ValueError("exported checkpoint base-model identity drift")
+    validate_model_snapshot_descriptor(
+        base_model["source"],
+        model_id=BASE_MODEL_ID,
+        revision=BASE_MODEL_REVISION,
+    )
+    validate_corpus_replay_pair(value["corpus_replay"])
+    export_manifest = _validate_file_descriptor(
+        value["export_manifest"],
+        label="export manifest",
+    )
+    if export_manifest["file"] != "cliffquant_export.json":
+        raise ValueError("export manifest filename drift")
+    files = value["checkpoint_files"]
+    if not isinstance(files, list) or not files:
+        raise ValueError("exported checkpoint file list is empty")
+    validated_files = [
+        _validate_file_descriptor(descriptor, label="checkpoint file") for descriptor in files
+    ]
+    names = [descriptor["file"] for descriptor in validated_files]
+    if names != ["cliffquant_export.json", *sorted(names[1:])] or len(names) != len(set(names)):
+        raise ValueError("exported checkpoint files are not unique and canonical")
+    if validated_files[0] != export_manifest:
+        raise ValueError("export manifest descriptor disagrees with checkpoint file list")
+    if value["checkpoint_files_sha256"] != sha256_bytes(canonical_json_bytes(validated_files)):
+        raise ValueError("exported checkpoint file aggregate mismatch")
+    if value["policy"] not in FROZEN_POLICIES:
+        raise ValueError("exported checkpoint policy drift")
+    gptq = value["gptq"]
+    if not isinstance(gptq, Mapping) or dict(gptq) != {
+        "backend": "GPTQ_TORCH",
+        "bits": BITS,
+        "desc_act": False,
+        "format": "gptq",
+        "group_size": GROUP_SIZE,
+        "method": "gptq",
+        "pack_dtype": "int32",
+        "sym": True,
+        "zero": INT4_LOGICAL_ZERO,
+    }:
+        raise ValueError("exported checkpoint GPTQ contract drift")
+    gptqmodel = value["gptqmodel"]
+    if (
+        not isinstance(gptqmodel, Mapping)
+        or gptqmodel.get("revision") != QWEN35_GPTQMODEL_TREE_REVISION
+        or not isinstance(gptqmodel.get("version"), str)
+        or not gptqmodel["version"]
+    ):
+        raise ValueError("exported checkpoint GPTQModel identity drift")
+    scale_run = value["scale_run"]
+    if (
+        not isinstance(scale_run, Mapping)
+        or set(scale_run) != {"manifest_sha256", "path"}
+        or not _is_sha256(scale_run["manifest_sha256"])
+        or not isinstance(scale_run["path"], str)
+        or Path(scale_run["path"]).name != scale_run["path"]
+    ):
+        raise ValueError("exported checkpoint scale-run identity drift")
+    payload = {key: value[key] for key in fields if key != "sha256"}
+    if value["sha256"] != sha256_bytes(canonical_json_bytes(payload)):
+        raise ValueError("exported checkpoint identity fingerprint mismatch")
+    return json.loads(canonical_json_bytes(dict(value)))
+
+
+def describe_exported_checkpoint(checkpoint_dir: str | Path) -> dict[str, Any]:
+    """Re-hash and describe every byte in a strict CliffQuant GPTQ export."""
+
+    checkpoint = Path(checkpoint_dir).resolve()
+    export_manifest = _verify_export_manifest(checkpoint)
+    identity = _checkpoint_identity(checkpoint, export_manifest)
+    return validate_exported_checkpoint_identity(identity)
+
+
+def _validate_runtime_identity(value: Any, *, device: str) -> dict[str, Any]:
+    base_fields = {
+        "device",
+        "implementation",
+        "machine",
+        "numpy",
+        "numpy_build",
+        "packages",
+        "platform",
+        "python",
+        "python_executable",
+    }
+    fields = base_fields | ({"accelerator"} if device.startswith("cuda") else set())
+    if not isinstance(value, Mapping) or set(value) != fields:
+        raise ValueError("verification runtime fields drift")
+    runtime = dict(value)
+    if runtime["device"] != device:
+        raise ValueError("verification runtime device drift")
+    for key in ("implementation", "numpy", "platform", "python", "python_executable"):
+        if not isinstance(runtime[key], str) or not runtime[key]:
+            raise ValueError(f"verification runtime {key} drift")
+    if not isinstance(runtime["machine"], str) or not isinstance(runtime["numpy_build"], Mapping):
+        raise ValueError("verification runtime platform metadata drift")
+    executable = Path(runtime["python_executable"])
+    if executable.is_absolute() or executable.name != runtime["python_executable"]:
+        raise ValueError("verification runtime executable path drift")
+    packages = runtime["packages"]
+    if (
+        not isinstance(packages, Mapping)
+        or set(packages) != set(_RUNTIME_PACKAGES)
+        or not all(
+            value is None or (isinstance(value, str) and value) for value in packages.values()
+        )
+    ):
+        raise ValueError("verification runtime package identity drift")
+    if runtime["numpy"] != packages["numpy"]:
+        raise ValueError("verification runtime NumPy identity drift")
+    if device.startswith("cuda"):
+        accelerator = runtime["accelerator"]
+        base_accelerator_fields = {
+            "available",
+            "cuda_runtime",
+            "deterministic_algorithms",
+            "deterministic_algorithms_warn_only",
+        }
+        if not isinstance(accelerator, Mapping):
+            raise ValueError("verification runtime accelerator drift")
+        available = accelerator.get("available")
+        expected_accelerator_fields = base_accelerator_fields
+        if available is True:
+            expected_accelerator_fields |= {
+                "capability",
+                "cublas_workspace_config",
+                "cudnn_allow_tf32",
+                "cudnn_benchmark",
+                "cudnn_deterministic",
+                "cudnn_version",
+                "device_index",
+                "float32_matmul_precision",
+                "matmul_allow_tf32",
+                "name",
+                "total_memory_bytes",
+            }
+        if (
+            type(available) is not bool
+            or set(accelerator) != expected_accelerator_fields
+            or type(accelerator["deterministic_algorithms"]) is not bool
+            or type(accelerator["deterministic_algorithms_warn_only"]) is not bool
+        ):
+            raise ValueError("verification runtime accelerator fields drift")
+    return json.loads(canonical_json_bytes(runtime))
+
+
+def _validate_current_verifier(value: Any) -> dict[str, Any]:
+    verifier = _validate_verifier_identity(value)
+    if verifier != _verifier_identity():
+        raise ValueError("verification report was produced by different verifier source bytes")
+    return verifier
+
+
+def _validate_clean_runtime_binding(
+    clean_environment: Mapping[str, Any],
+    runtime: Mapping[str, Any],
+    checkpoint: Mapping[str, Any],
+) -> None:
+    clean_packages = _package_inventory(
+        clean_environment["packages"],
+        label="clean environment",
+    )
+    runtime_packages = runtime["packages"]
+    for name, version in runtime_packages.items():
+        normalized = re.sub(r"[-_.]+", "-", name).casefold()
+        if version != clean_packages.get(normalized):
+            raise ValueError(f"runtime package differs from clean environment: {name}")
+    if (
+        runtime["implementation"] != clean_environment["python"]["implementation"]
+        or runtime["python"] != clean_environment["python"]["version"]
+    ):
+        raise ValueError("runtime Python differs from clean environment")
+    if (
+        checkpoint["gptqmodel"]["revision"] != clean_environment["gptqmodel"]["revision"]
+        or checkpoint["gptqmodel"]["version"] != clean_packages["gptqmodel"]
+    ):
+        raise ValueError("checkpoint GPTQModel identity differs from clean environment")
+
+
+def _validate_structural_report(
+    report: Mapping[str, Any],
+    *,
+    checkpoint: Mapping[str, Any],
+) -> None:
+    fields = {
+        "auxiliary_files",
+        "base_checkpoint_files",
+        "checkpoint_files",
+        "checkpoint_identity",
+        "corpus_replay",
+        "export_manifest_sha256",
+        "modules",
+        "policy",
+        "preserved_non_target_tensor_count",
+        "preserved_non_target_tensors",
+        "runtime",
+        "scale_run_sha256",
+        "schema",
+        "status",
+        "summary",
+        "verifier",
+    }
+    if set(report) != fields:
+        raise ValueError("structural verification report fields drift")
+    if (
+        report["policy"] != checkpoint["policy"]
+        or report["export_manifest_sha256"] != checkpoint["export_manifest"]["sha256"]
+        or report["scale_run_sha256"] != checkpoint["scale_run"]["manifest_sha256"]
+        or report["corpus_replay"] != checkpoint["corpus_replay"]
+    ):
+        raise ValueError("structural report checkpoint binding drift")
+    validate_corpus_replay_pair(report["corpus_replay"])
+    _validate_current_verifier(report["verifier"])
+    _validate_runtime_identity(report["runtime"], device="cpu")
+
+    base_files = _validate_descriptor_list(
+        report["base_checkpoint_files"],
+        label="base checkpoint",
+    )
+    checkpoint_files = _validate_descriptor_list(
+        report["checkpoint_files"],
+        label="packed checkpoint",
+    )
+    del base_files
+    live_files = {item["file"]: item for item in checkpoint["checkpoint_files"]}
+    if any(live_files.get(item["file"]) != item for item in checkpoint_files):
+        raise ValueError("structural checkpoint tensor-file identity drift")
+
+    auxiliary = report["auxiliary_files"]
+    if not isinstance(auxiliary, list) or not auxiliary:
+        raise ValueError("structural auxiliary-file evidence is empty")
+    auxiliary_names: list[str] = []
+    for item in auxiliary:
+        if not isinstance(item, Mapping) or set(item) != {
+            "base_sha256",
+            "file",
+            "output_sha256",
+        }:
+            raise ValueError("structural auxiliary-file evidence fields drift")
+        descriptor = _validate_file_descriptor(
+            {
+                "file": item["file"],
+                "sha256": item["output_sha256"],
+                "size_bytes": live_files.get(item["file"], {}).get("size_bytes"),
+            },
+            label="structural auxiliary",
+        )
+        if (
+            not _is_sha256(item["base_sha256"])
+            or item["base_sha256"] != item["output_sha256"]
+            or live_files.get(item["file"]) != descriptor
+        ):
+            raise ValueError("structural auxiliary-file identity drift")
+        auxiliary_names.append(item["file"])
+    expected_auxiliary_order = [name for name in _AUXILIARY_FILES if name in set(auxiliary_names)]
+    if auxiliary_names != expected_auxiliary_order or len(auxiliary_names) != len(
+        set(auxiliary_names)
+    ):
+        raise ValueError("structural auxiliary-file evidence is not unique and canonical")
+    if not any(name.startswith("tokenizer") for name in auxiliary_names) or not any(
+        "processor" in name for name in auxiliary_names
+    ):
+        raise ValueError("structural tokenizer or processor evidence is missing")
+
+    modules = report["modules"]
+    if not isinstance(modules, list) or len(modules) != QWEN35_08B_EXPECTED_QUANTIZED_MODULES:
+        raise ValueError("structural module evidence coverage drift")
+    module_names: list[str] = []
+    signed_codes_checked = 0
+    for item in modules:
+        if not isinstance(item, Mapping) or set(item) != {
+            "dequant_values_checked",
+            "g_idx_sha256",
+            "module",
+            "qweight_sha256",
+            "qzeros_sha256",
+            "scales_sha256",
+            "signed_codes_checked",
+        }:
+            raise ValueError("structural module evidence fields drift")
+        if (
+            not isinstance(item["module"], str)
+            or not item["module"]
+            or type(item["dequant_values_checked"]) is not int
+            or item["dequant_values_checked"] <= 0
+            or type(item["signed_codes_checked"]) is not int
+            or item["signed_codes_checked"] <= 0
+            or not all(
+                _is_sha256(item[key])
+                for key in (
+                    "g_idx_sha256",
+                    "qweight_sha256",
+                    "qzeros_sha256",
+                    "scales_sha256",
+                )
+            )
+        ):
+            raise ValueError("structural module evidence value drift")
+        module_names.append(item["module"])
+        signed_codes_checked += item["signed_codes_checked"]
+    if len(module_names) != len(set(module_names)):
+        raise ValueError("structural module evidence contains duplicate modules")
+
+    preserved = report["preserved_non_target_tensors"]
+    if not isinstance(preserved, list):
+        raise ValueError("structural preserved-tensor evidence drift")
+    preserved_keys: list[str] = []
+    for item in preserved:
+        if (
+            not isinstance(item, Mapping)
+            or set(item) != {"key", "sha256"}
+            or not isinstance(item["key"], str)
+            or not item["key"]
+            or not _is_sha256(item["sha256"])
+        ):
+            raise ValueError("structural preserved-tensor evidence fields drift")
+        preserved_keys.append(item["key"])
+    if preserved_keys != sorted(preserved_keys) or len(preserved_keys) != len(set(preserved_keys)):
+        raise ValueError("structural preserved-tensor evidence is not unique and canonical")
+    if type(report["preserved_non_target_tensor_count"]) is not int or report[
+        "preserved_non_target_tensor_count"
+    ] != len(preserved):
+        raise ValueError("structural preserved-tensor count drift")
+    expected_summary = {
+        "dense_target_weights_present": 0,
+        "module_buffer_sets": len(modules),
+        "non_target_tensors_exact": len(preserved),
+        "signed_codes_checked": signed_codes_checked,
+    }
+    if report["summary"] != expected_summary:
+        raise ValueError("structural verification summary drift")
+
+
+def _validate_runtime_report(
+    report: Mapping[str, Any],
+    *,
+    checkpoint: Mapping[str, Any],
+    require_clean_environment: bool,
+) -> None:
+    kind = report.get("kind")
+    common_fields = {
+        "backend",
+        "checkpoint_identity",
+        "clean_environment",
+        "device",
+        "generated_tokens",
+        "kind",
+        "max_new_tokens",
+        "prompt",
+        "prompt_sha256",
+        "runtime",
+        "schema",
+        "score_steps",
+        "scores_sha256",
+        "sequence_sha256",
+        "status",
+        "verifier",
+    }
+    expected_fields = common_fields | (
+        {"decoded_text"} if kind == "text" else {"image", "image_sha256"}
+    )
+    if kind not in {"text", "image-text"} or set(report) != expected_fields:
+        raise ValueError("runtime verification report fields drift")
+    prompt = report["prompt"]
+    if (
+        report["backend"] != "GPTQ_TORCH"
+        or not isinstance(report["device"], str)
+        or not report["device"]
+        or not isinstance(prompt, str)
+        or not prompt
+        or report["prompt_sha256"] != sha256_bytes(prompt.encode("utf-8"))
+        or type(report["max_new_tokens"]) is not int
+        or report["max_new_tokens"] <= 0
+        or type(report["generated_tokens"]) is not int
+        or report["generated_tokens"] <= 0
+        or type(report["score_steps"]) is not int
+        or report["score_steps"] <= 0
+        or report["score_steps"] > report["max_new_tokens"]
+        or not _is_sha256(report["sequence_sha256"])
+        or not isinstance(report["scores_sha256"], list)
+        or len(report["scores_sha256"]) != report["score_steps"]
+        or not all(_is_sha256(value) for value in report["scores_sha256"])
+    ):
+        raise ValueError("runtime smoke-test evidence drift")
+    if (
+        kind == "text"
+        and report["decoded_text"] is not None
+        and not isinstance(report["decoded_text"], str)
+    ):
+        raise ValueError("runtime decoded text drift")
+    if kind == "image-text":
+        image = _validate_file_descriptor(report["image"], label="smoke image")
+        if report["image_sha256"] != image["sha256"]:
+            raise ValueError("image smoke input identity drift")
+
+    _validate_current_verifier(report["verifier"])
+    runtime = _validate_runtime_identity(report["runtime"], device=report["device"])
+    if runtime["packages"]["gptqmodel"] != checkpoint["gptqmodel"]["version"]:
+        raise ValueError("runtime GPTQModel version differs from checkpoint")
+    clean_environment = report["clean_environment"]
+    if clean_environment is None:
+        if require_clean_environment:
+            raise ValueError("runtime report is not bound to a clean-environment report")
+    else:
+        clean_environment = validate_clean_environment_identity(clean_environment)
+        _validate_clean_runtime_binding(clean_environment, runtime, checkpoint)
+
+
+def load_verification_report(
+    path: str | Path,
+    *,
+    checkpoint_dir: str | Path,
+    require_clean_environment: bool = False,
+) -> dict[str, Any]:
+    """Validate a canonical report against live checkpoint and verifier bytes."""
+
+    candidate = Path(path).resolve()
+    checkpoint_root = Path(checkpoint_dir).resolve()
+    _require_report_outside_checkpoint(candidate, checkpoint_root)
+    try:
+        schema = json.loads(candidate.read_bytes()).get("schema")
+    except (AttributeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"verification report is not a JSON object: {candidate}") from exc
+    if schema not in {VERIFICATION_SCHEMA, RUNTIME_VERIFICATION_SCHEMA}:
+        raise ValueError(f"unsupported verification report schema: {schema!r}")
+    report = _load_canonical_report(candidate, expected_schema=schema)
+    if report.get("status") != "pass":
+        raise ValueError("verification report did not pass")
+    checkpoint = validate_exported_checkpoint_identity(report.get("checkpoint_identity"))
+    live_checkpoint = describe_exported_checkpoint(checkpoint_root)
+    if checkpoint != live_checkpoint:
+        raise ValueError("verification report checkpoint differs from live checkpoint bytes")
+    if schema == VERIFICATION_SCHEMA:
+        _validate_structural_report(report, checkpoint=checkpoint)
+    else:
+        _validate_runtime_report(
+            report,
+            checkpoint=checkpoint,
+            require_clean_environment=require_clean_environment,
+        )
+    return report
+
+
+def _verify_auxiliary_files(base: Path, output: Path) -> list[dict[str, Any]]:
     evidence: list[dict[str, Any]] = []
-    for name in names:
+    for name in _AUXILIARY_FILES:
         base_file = base / name
         if not base_file.is_file():
             continue
@@ -483,7 +1512,11 @@ def verify_full_model_structure(
         raise ValueError("scale run and base checkpoint fingerprints differ")
 
     checkpoint_root = Path(checkpoint_dir).resolve()
+    _require_report_outside_checkpoint(report_path, checkpoint_root)
     export_manifest = _verify_export_manifest(checkpoint_root)
+    checkpoint_identity = validate_exported_checkpoint_identity(
+        _checkpoint_identity(checkpoint_root, export_manifest)
+    )
     if export_manifest["base_model"]["source"] != dict(base_source.provenance):
         raise ValueError("export manifest and live base snapshot bytes differ")
     if export_manifest.get("scale_run", {}).get("manifest_sha256") != scale_run.manifest_sha256:
@@ -530,6 +1563,7 @@ def verify_full_model_structure(
         "auxiliary_files": _verify_auxiliary_files(base_root, checkpoint_root),
         "base_checkpoint_files": base.file_hashes,
         "checkpoint_files": output.file_hashes,
+        "checkpoint_identity": checkpoint_identity,
         "corpus_replay": corpus_replay,
         "export_manifest_sha256": sha256_file(checkpoint_root / "cliffquant_export.json"),
         "modules": modules,
@@ -545,20 +1579,10 @@ def verify_full_model_structure(
             "non_target_tensors_exact": len(preserved),
             "signed_codes_checked": sum(item["signed_codes_checked"] for item in modules),
         },
+        "runtime": _verification_runtime("cpu"),
+        "verifier": _verifier_identity(),
     }
-    destination = Path(report_path).resolve()
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_bytes(canonical_json_bytes(report))
-    hashes = {
-        "report": {
-            "file": destination.name,
-            "sha256": sha256_file(destination),
-            "size_bytes": destination.stat().st_size,
-        }
-    }
-    destination.with_name(f"{destination.stem}.sha256.json").write_bytes(
-        canonical_json_bytes(hashes)
-    )
+    _write_canonical_report(report, report_path)
     return report
 
 
@@ -658,7 +1682,9 @@ def run_text_generation_smoke(
     *,
     checkpoint_dir: str | Path,
     gptqmodel_source: str | Path,
+    report_path: str | Path,
     prompt: str,
+    environment_report: str | Path | None = None,
     device: str = "cuda:0",
     max_new_tokens: int = 16,
 ) -> dict[str, Any]:
@@ -668,11 +1694,19 @@ def run_text_generation_smoke(
         raise ValueError("text smoke prompt must be non-empty")
     if type(max_new_tokens) is not int or max_new_tokens <= 0:
         raise ValueError("max_new_tokens must be a positive integer")
-    _contract, wrapper = load_fresh_gptq_torch(
-        checkpoint_dir=checkpoint_dir,
+    checkpoint_root = Path(checkpoint_dir).resolve()
+    _require_report_outside_checkpoint(report_path, checkpoint_root)
+    checkpoint_identity = describe_exported_checkpoint(checkpoint_root)
+    contract, wrapper = load_fresh_gptq_torch(
+        checkpoint_dir=checkpoint_root,
         gptqmodel_source=gptqmodel_source,
         device=device,
     )
+    if (
+        contract.revision != checkpoint_identity["gptqmodel"]["revision"]
+        or contract.version != checkpoint_identity["gptqmodel"]["version"]
+    ):
+        raise ValueError("runtime GPTQModel identity differs from the exported checkpoint")
     tokenizer = getattr(wrapper, "tokenizer", None)
     if tokenizer is None:
         tokenizer = getattr(wrapper, "processor", None)
@@ -687,14 +1721,28 @@ def run_text_generation_smoke(
     decoded = (
         decode(first[0][0].detach().cpu(), skip_special_tokens=True) if callable(decode) else None
     )
-    return {
+    report = {
         **evidence,
         "backend": "GPTQ_TORCH",
+        "checkpoint_identity": checkpoint_identity,
+        "clean_environment": (
+            load_clean_environment_identity(environment_report)
+            if environment_report is not None
+            else None
+        ),
         "decoded_text": decoded,
         "device": device,
         "kind": "text",
+        "max_new_tokens": max_new_tokens,
+        "prompt": prompt,
+        "prompt_sha256": sha256_bytes(prompt.encode("utf-8")),
+        "runtime": _verification_runtime(device),
+        "schema": RUNTIME_VERIFICATION_SCHEMA,
         "status": "pass",
+        "verifier": _verifier_identity(),
     }
+    _write_canonical_report(report, report_path)
+    return report
 
 
 def run_image_generation_smoke(
@@ -702,7 +1750,9 @@ def run_image_generation_smoke(
     checkpoint_dir: str | Path,
     gptqmodel_source: str | Path,
     image_path: str | Path,
+    report_path: str | Path,
     prompt: str,
+    environment_report: str | Path | None = None,
     device: str = "cuda:0",
     max_new_tokens: int = 16,
 ) -> dict[str, Any]:
@@ -717,11 +1767,19 @@ def run_image_generation_smoke(
         from PIL import Image
     except ImportError as exc:
         raise RuntimeError("Pillow is required for the image-text smoke") from exc
-    _contract, wrapper = load_fresh_gptq_torch(
-        checkpoint_dir=checkpoint_dir,
+    checkpoint_root = Path(checkpoint_dir).resolve()
+    _require_report_outside_checkpoint(report_path, checkpoint_root)
+    checkpoint_identity = describe_exported_checkpoint(checkpoint_root)
+    contract, wrapper = load_fresh_gptq_torch(
+        checkpoint_dir=checkpoint_root,
         gptqmodel_source=gptqmodel_source,
         device=device,
     )
+    if (
+        contract.revision != checkpoint_identity["gptqmodel"]["revision"]
+        or contract.version != checkpoint_identity["gptqmodel"]["version"]
+    ):
+        raise ValueError("runtime GPTQModel identity differs from the exported checkpoint")
     processor = getattr(wrapper, "processor", None)
     if not callable(processor):
         raise RuntimeError("fresh GPTQModel load did not preserve a callable processor")
@@ -730,11 +1788,26 @@ def run_image_generation_smoke(
     moved = _move_inputs(inputs, device)
     first = _generate_once(wrapper, moved, max_new_tokens=max_new_tokens)
     second = _generate_once(wrapper, moved, max_new_tokens=max_new_tokens)
-    return {
+    report = {
         **_check_generation(first, second),
         "backend": "GPTQ_TORCH",
+        "checkpoint_identity": checkpoint_identity,
+        "clean_environment": (
+            load_clean_environment_identity(environment_report)
+            if environment_report is not None
+            else None
+        ),
         "device": device,
+        "image": _file_descriptor(path),
         "image_sha256": sha256_file(path),
         "kind": "image-text",
+        "max_new_tokens": max_new_tokens,
+        "prompt": prompt,
+        "prompt_sha256": sha256_bytes(prompt.encode("utf-8")),
+        "runtime": _verification_runtime(device),
+        "schema": RUNTIME_VERIFICATION_SCHEMA,
         "status": "pass",
+        "verifier": _verifier_identity(),
     }
+    _write_canonical_report(report, report_path)
+    return report

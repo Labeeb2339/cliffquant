@@ -23,6 +23,7 @@ classifiers = [
 [project.optional-dependencies]
 dev = [
   "build>=1.2",
+  "packaging>=26.2",
   "pytest>=8.0",
   "ruff>=0.6",
 ]

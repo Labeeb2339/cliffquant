@@ -2,5 +2,6 @@ include LICENSE
 include README.md
 recursive-include benchmarks *.py
 recursive-include research *.md
+recursive-include requirements *.txt
 recursive-include scripts *.py
 recursive-include tests *.py
