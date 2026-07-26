@@ -69,19 +69,26 @@ not duplicate the multi-gigabyte model checkpoints or per-module scale archives.
 
 ## Independent validation
 
-Run:
+Run the portable byte-inventory check:
 
 ```text
-python scripts/validate_publication_release.py
+python scripts/validate_publication_release.py --inventory-only
 ```
 
-The validator rejects symlinks and reparse points, path escapes, missing files,
-extra files, non-canonical JSON/JSONL, hash drift, status drift, gate drift, and
-identity disagreement. It re-hashes every regular file before and after
-semantic validation, recomputes the complete proxy summary from the bundled
-group records, and reruns every other semantic check that does not require the
-omitted live checkpoints. This offline command proves byte integrity and
-internal consistency of the curated evidence; only the build command proves
+This platform-independent mode rejects symlinks and reparse points, path
+escapes, missing files, extra files, and size or hash drift. It is the check run
+against the checked-in Experiment 001 bundle in CI.
+
+Omit `--inventory-only` for the deeper semantic replay. That mode additionally
+rejects non-canonical JSON/JSONL, status drift, gate drift, and identity
+disagreement; recomputes the complete proxy summary; and reruns every other
+semantic check that does not require the omitted live checkpoints. Its solver
+certificate is intentionally bound to the recorded Windows, Python 3.11.15,
+NumPy 2.2.6, and BLAS build, so recreate the frozen environment in
+`research/PUBLICATION_VERIFICATION.md` before using it.
+
+The portable check proves exact checked-in bytes. The deeper replay proves
+internal consistency in the recorded runtime. Only the build command proves
 that the evidence was bound to the supplied live checkpoints and independently
-rerun at construction time. Passing either gate does not establish novelty,
-state of the art, or a breakthrough claim.
+rerun at construction time. Passing any gate does not establish novelty, state
+of the art, or a breakthrough claim.

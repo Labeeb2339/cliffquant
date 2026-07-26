@@ -2236,6 +2236,17 @@ def validate_publication_release(release_dir: str | Path) -> dict[str, Any]:
     return _validate_release(release_dir, enforce_location=True)
 
 
+def validate_publication_release_inventory(
+    release_dir: str | Path,
+) -> dict[str, Any]:
+    """Validate the exact release inventory without replaying runtime-bound semantics."""
+
+    root = _regular_directory(release_dir, label="publication release")
+    _require_release_location(root)
+    manifest, _ = _validate_release_manifest_and_inventory(root)
+    return json.loads(canonical_json_bytes(manifest))
+
+
 def _copy_regular(source: Path, destination: Path) -> None:
     source = _regular_file(source, label="publication source file")
     destination.parent.mkdir(parents=True, exist_ok=True)

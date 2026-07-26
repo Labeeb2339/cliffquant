@@ -1,3 +1,10 @@
+# Keep provenance-locked source and protocol bytes identical on every platform.
+.gitattributes text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
 # Preserve byte-level evidence identities on every checkout.
 research/results/experiment-001/** -text
 figures/figure-manifest.json -text

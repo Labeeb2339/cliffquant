@@ -973,3 +973,15 @@ def test_offline_scale_module_rejects_extra_object_fields() -> None:
             {**module, "ignored": True},
             policy=release.POLICY_CLIFFQUANT,
         )
+
+
+def test_checked_in_publication_release_inventory_is_valid() -> None:
+    repository_root = Path(__file__).resolve().parents[1]
+    result = release.validate_publication_release_inventory(
+        repository_root / "research" / "results" / "experiment-001"
+    )
+
+    assert result["schema"] == release.RELEASE_SCHEMA
+    assert result["experiment"] == release.EXPERIMENT_NAME
+    assert result["status"] == "pass"
+    assert len(result["files"]) == len(release._STATIC_PAYLOAD_PATHS)

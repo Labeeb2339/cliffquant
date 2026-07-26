@@ -209,12 +209,20 @@ The generator verifies the input checksum manifests before parsing results and
 writes its own provenance to
 [`figures/figure-manifest.json`](figures/figure-manifest.json).
 
-Validate the curated release offline:
+Validate the exact checked-in inventory on any supported development platform:
 
 ```bash
 python scripts/validate_publication_release.py \
+  --inventory-only \
   research/results/experiment-001
 ```
+
+This portable check rejects missing, extra, symlinked, reparse-point, size-drifted,
+or hash-drifted release files. The deeper semantic replay omits
+`--inventory-only`, but its solver-certificate check is intentionally bound to
+the recorded Windows, Python 3.11.15, NumPy 2.2.6, and BLAS build. Recreate the
+[frozen verification environment](research/PUBLICATION_VERIFICATION.md) before
+running that stricter command.
 
 ## Research boundary
 
