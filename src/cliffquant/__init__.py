@@ -1,6 +1,11 @@
 """Correctness-first exhaustive FP16 scale selection."""
 
 from cliffquant.approximate import solve_approximate
+from cliffquant.breakpoint import (
+    BreakpointSearchProvenance,
+    BreakpointSolveResult,
+    solve_breakpoint_exact,
+)
 from cliffquant.contracts import (
     ApproximateSearchProvenance,
     ApproximateSolveResult,
@@ -26,6 +31,8 @@ __all__ = [
     "FP16_POSITIVE_FINITE_COUNT",
     "ApproximateSearchProvenance",
     "ApproximateSolveResult",
+    "BreakpointSearchProvenance",
+    "BreakpointSolveResult",
     "QuantizerSpec",
     "ScaleEvaluation",
     "SolveResult",
@@ -37,6 +44,7 @@ __all__ = [
     "quantize_codes",
     "scale_to_bits",
     "solve_approximate",
+    "solve_breakpoint_exact",
     "solve_exact",
 ]
 
