@@ -97,7 +97,7 @@ os.environ.setdefault("TORCH_COMPILE_DISABLE", "1")
 from gptqmodel import BACKEND, GPTQModel
 
 model = GPTQModel.load(
-    "Labeeb2339/Qwen3.5-0.8B-Base-CliffQuant-W4A16-G128",
+    "labeebaryan/Qwen3.5-0.8B-Base-CliffQuant-W4A16-G128",
     device="cuda:0",
     backend=BACKEND.GPTQ_TORCH,
     trust_remote_code=False,

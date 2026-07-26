@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Labeeb2339/cliffquant/actions/workflows/ci.yml/badge.svg)](https://github.com/Labeeb2339/cliffquant/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-6ad7c4)](LICENSE)
-[![Model](https://img.shields.io/badge/%F0%9F%A4%97-model-Qwen3.5--0.8B--CliffQuant-f0b85a)](https://huggingface.co/Labeeb2339/Qwen3.5-0.8B-Base-CliffQuant-W4A16-G128)
+[![Model](https://img.shields.io/badge/%F0%9F%A4%97-model-Qwen3.5--0.8B--CliffQuant-f0b85a)](https://huggingface.co/labeebaryan/Qwen3.5-0.8B-Base-CliffQuant-W4A16-G128)
 
 Exact minimax FP16 scale selection for multi-environment W4A16 quantization.
 
@@ -19,7 +19,7 @@ environments.
 
 ![Held-out NLL comparison](figures/heldout-nll-comparison.png)
 
-[Download the verified W4A16 checkpoint](https://huggingface.co/Labeeb2339/Qwen3.5-0.8B-Base-CliffQuant-W4A16-G128)
+[Download the verified W4A16 checkpoint](https://huggingface.co/labeebaryan/Qwen3.5-0.8B-Base-CliffQuant-W4A16-G128)
 |
 [Inspect the curated evidence bundle](research/results/experiment-001)
 |
@@ -172,7 +172,7 @@ os.environ.setdefault("TORCH_COMPILE_DISABLE", "1")
 from gptqmodel import BACKEND, GPTQModel
 
 model = GPTQModel.load(
-    "Labeeb2339/Qwen3.5-0.8B-Base-CliffQuant-W4A16-G128",
+    "labeebaryan/Qwen3.5-0.8B-Base-CliffQuant-W4A16-G128",
     device="cuda:0",
     backend=BACKEND.GPTQ_TORCH,
     trust_remote_code=False,
