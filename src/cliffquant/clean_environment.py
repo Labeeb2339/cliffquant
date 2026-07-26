@@ -133,6 +133,8 @@ def _sanitized_environment(
             "PYTHONIOENCODING": "utf-8",
             "PYTHONNOUSERSITE": "1",
             "PYTHONUTF8": "1",
+            "USER": "cliffquant-clean",
+            "USERNAME": "cliffquant-clean",
         }
     )
     if workspace is not None:

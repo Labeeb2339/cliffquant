@@ -55,8 +55,8 @@ The runner:
    mode, and disables user and pip configuration;
 3. installs only wheels from the external wheelhouse, offline, with
    `--require-hashes`, `--only-binary`, and no dependency expansion;
-4. rehomes Hugging Face, PyTorch, extension, and Inductor caches inside the
-   disposable workspace;
+4. uses a synthetic non-personal runtime username and rehomes Hugging Face,
+   PyTorch, extension, and Inductor caches inside the disposable workspace;
 5. requires the hashed lock to contain the same package versions as
    `requirements/verification-cu128.txt`, plus the pinned bootstrap tools;
 6. fetches GPTQModel at commit

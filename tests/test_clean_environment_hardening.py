@@ -69,6 +69,8 @@ def test_sanitized_environment_drops_process_injection_and_rehomes_caches(
     assert environment["GIT_CONFIG_NOSYSTEM"] == "1"
     assert environment["GIT_CONFIG_GLOBAL"] == os.devnull
     assert environment["PYTHONHASHSEED"] == "2339"
+    assert environment["USER"] == "cliffquant-clean"
+    assert environment["USERNAME"] == "cliffquant-clean"
     assert Path(environment["HF_HOME"]).is_relative_to(tmp_path)
     assert Path(environment["TORCH_HOME"]).is_relative_to(tmp_path)
     assert Path(environment["TORCHINDUCTOR_CACHE_DIR"]).is_relative_to(tmp_path)
