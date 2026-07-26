@@ -24,6 +24,7 @@ from cliffquant.full_model_artifacts import (
 from cliffquant.full_model_verify import (
     CLEAN_BUILD_SOURCE_SCHEMA,
     CLEAN_ENVIRONMENT_SCHEMA,
+    HUB_RELEASE_ENVELOPE_FILES,
     RUNTIME_VERIFICATION_SCHEMA,
     VERIFICATION_LOCK_SHA256,
     VERIFICATION_SCHEMA,
@@ -192,6 +193,15 @@ def _write_export(root: Path) -> None:
         "status": "packed-unverified",
     }
     (root / "cliffquant_export.json").write_bytes(canonical_json_bytes(manifest))
+
+
+def _write_hub_release_envelope(root: Path) -> None:
+    assets = root / "assets"
+    assets.mkdir()
+    (root / "README.md").write_text("# Hub model card\n", encoding="utf-8")
+    (root / ".gitattributes").write_text("*.safetensors filter=lfs\n", encoding="utf-8")
+    (assets / "proxy-policy-comparison.png").write_bytes(b"proxy-graph")
+    (assets / "heldout-nll-comparison.png").write_bytes(b"nll-graph")
 
 
 def _structural_report(checkpoint: Path) -> dict[str, Any]:
@@ -396,6 +406,98 @@ def test_checkpoint_identity_rejects_export_manifest_symlink_escape(tmp_path: Pa
 
     with pytest.raises(ValueError, match="regular file inside the checkpoint"):
         describe_exported_checkpoint(checkpoint)
+
+
+def test_hub_release_envelope_preserves_immutable_payload_identity(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "checkpoint"
+    _write_export(checkpoint)
+    report = _structural_report(checkpoint)
+    strict_identity = report["checkpoint_identity"]
+    report_path = tmp_path / "structural.json"
+    _write_canonical_report(report, report_path)
+    _write_hub_release_envelope(checkpoint)
+
+    with pytest.raises(ValueError, match="export file coverage mismatch"):
+        describe_exported_checkpoint(checkpoint)
+
+    hub_identity = describe_exported_checkpoint(checkpoint, hub_release=True)
+    assert hub_identity == strict_identity
+
+    result = load_verification_report(
+        report_path,
+        checkpoint_dir=checkpoint,
+        hub_release=True,
+    )
+    assert result["status"] == "model-payload-verified"
+    assert result["report"] == report
+    assert result["publication_envelope"] == {
+        "files": list(HUB_RELEASE_ENVELOPE_FILES),
+        "identity_scope": "model-payload-only",
+        "path_policy": "required-regular-non-symlink-in-root",
+        "publication_metadata_bytes_verified": False,
+        "status": "path-policy-verified",
+    }
+
+    (checkpoint / "README.md").write_text("# Changed Hub model card\n", encoding="utf-8")
+    assert describe_exported_checkpoint(checkpoint, hub_release=True) == strict_identity
+
+
+@pytest.mark.parametrize("missing_file", HUB_RELEASE_ENVELOPE_FILES)
+def test_hub_release_requires_every_envelope_file(
+    tmp_path: Path,
+    missing_file: str,
+) -> None:
+    checkpoint = tmp_path / "checkpoint"
+    _write_export(checkpoint)
+    _write_hub_release_envelope(checkpoint)
+    (checkpoint / missing_file).unlink()
+
+    with pytest.raises(FileNotFoundError, match="required Hub publication envelope file"):
+        describe_exported_checkpoint(checkpoint, hub_release=True)
+
+
+def test_hub_release_rejects_every_other_extra_file(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "checkpoint"
+    _write_export(checkpoint)
+    _write_hub_release_envelope(checkpoint)
+    (checkpoint / "untracked-notes.txt").write_text("not allowlisted\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"extra=\['untracked-notes.txt'\]"):
+        describe_exported_checkpoint(checkpoint, hub_release=True)
+
+
+def test_hub_release_rejects_symlinked_envelope_file(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "checkpoint"
+    _write_export(checkpoint)
+    _write_hub_release_envelope(checkpoint)
+    readme = checkpoint / "README.md"
+    outside = tmp_path / "outside-readme.md"
+    outside.write_text("# Outside\n", encoding="utf-8")
+    readme.unlink()
+    try:
+        readme.symlink_to(outside)
+    except OSError as exc:
+        pytest.skip(f"file symlinks are unavailable: {exc}")
+
+    with pytest.raises(ValueError, match="regular non-symlink files"):
+        describe_exported_checkpoint(checkpoint, hub_release=True)
+
+
+def test_report_parser_exposes_explicit_hub_release_flag() -> None:
+    from scripts.verify_full_model_gptq import _parser
+
+    args = _parser().parse_args(
+        [
+            "report",
+            "--report",
+            "structural.json",
+            "--checkpoint",
+            "hub-stage",
+            "--hub-release",
+        ]
+    )
+
+    assert args.hub_release is True
 
 
 def test_structural_report_sidecar_preserves_all_identity_bindings(tmp_path: Path) -> None:

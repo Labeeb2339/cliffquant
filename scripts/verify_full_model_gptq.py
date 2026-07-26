@@ -100,6 +100,14 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="reject runtime evidence not produced by the clean-venv runner",
     )
+    report.add_argument(
+        "--hub-release",
+        action="store_true",
+        help=(
+            "validate the immutable model payload inside the exact path-only Hub "
+            "publication envelope"
+        ),
+    )
     return parser
 
 
@@ -141,6 +149,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.report,
             checkpoint_dir=args.checkpoint,
             require_clean_environment=args.require_clean_environment,
+            hub_release=args.hub_release,
         )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0

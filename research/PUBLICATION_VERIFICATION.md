@@ -93,6 +93,39 @@ verifier source bytes, and validates the complete structural or generation
 evidence. A sidecar detects accidental drift; the published Git commit and
 reported hashes are the external evidence anchors.
 
+## Hub release staging
+
+The immutable exported checkpoint contains only the model payload described by
+`cliffquant_export.json`. Keep that manifest and the saved verification reports
+unchanged when preparing the Hugging Face repository.
+
+Hub staging has one explicit opt-in envelope:
+
+- `README.md`;
+- `.gitattributes`;
+- `assets/proxy-policy-comparison.png`; and
+- `assets/heldout-nll-comparison.png`.
+
+All four paths are required to be regular, non-symlink files inside the staged
+checkpoint. Every other extra file is rejected. Default report validation
+remains strict and rejects the envelope as unmanifested payload.
+
+Validate an existing saved report against the Hub-staged directory with:
+
+```powershell
+python scripts/verify_full_model_gptq.py report `
+  --report <evidence-directory>/clean-load/text-smoke.json `
+  --checkpoint <hub-staged-checkpoint> `
+  --require-clean-environment `
+  --hub-release
+```
+
+The Hub result is labelled `model-payload-verified`. The verifier still hashes
+and validates every model-payload byte against the immutable checkpoint
+identity, but it validates publication-envelope paths and file types only.
+README, `.gitattributes`, and graph bytes are deliberately not part of the
+model-payload identity and are not claimed as byte-verified metadata.
+
 The disposable work directory is intentionally retained after the run for
 diagnosis. It is not publication evidence; only the canonical reports in the
 output directory are.

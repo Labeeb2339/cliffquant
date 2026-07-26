@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import stat
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -58,6 +59,12 @@ VERIFIER_IDENTITY_SCHEMA = "cliffquant.verifier-identity.v1"
 CLEAN_ENVIRONMENT_SCHEMA = "cliffquant.clean-verification-environment.v1"
 CLEAN_BUILD_SOURCE_SCHEMA = "cliffquant.clean-build-source.v1"
 VERIFICATION_LOCK_SHA256 = "7306bc57d022196092ae878fbad343f1c6dc7473ac9e3a461a995e0f64d6f4fe"
+HUB_RELEASE_ENVELOPE_FILES = (
+    "README.md",
+    ".gitattributes",
+    "assets/proxy-policy-comparison.png",
+    "assets/heldout-nll-comparison.png",
+)
 
 _VERIFIER_SOURCES = (
     "full_model_artifacts.py",
@@ -732,7 +739,45 @@ def _numpy(tensor: Any, *, float64: bool = False) -> NDArray[np.generic]:
     return np.ascontiguousarray(value.numpy())
 
 
-def _verify_export_manifest(checkpoint: Path) -> dict[str, Any]:
+def _validate_hub_release_envelope(checkpoint: Path) -> dict[str, Any]:
+    for logical_name in HUB_RELEASE_ENVELOPE_FILES:
+        candidate = checkpoint / logical_name
+        for parent in candidate.parents:
+            if parent == checkpoint:
+                break
+            if parent.is_symlink():
+                raise ValueError(
+                    "Hub publication envelope paths must have regular non-symlink parents "
+                    f"inside the checkpoint: {logical_name}"
+                )
+        try:
+            mode = candidate.lstat().st_mode
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(
+                f"required Hub publication envelope file is missing: {logical_name}"
+            ) from exc
+        if candidate.is_symlink() or not stat.S_ISREG(mode):
+            raise ValueError(
+                "Hub publication envelope files must be regular non-symlink files "
+                f"inside the checkpoint: {logical_name}"
+            )
+        resolved = candidate.resolve(strict=True)
+        if checkpoint != resolved and checkpoint not in resolved.parents:
+            raise ValueError(f"Hub publication envelope file escapes checkpoint: {logical_name}")
+    return {
+        "files": list(HUB_RELEASE_ENVELOPE_FILES),
+        "identity_scope": "model-payload-only",
+        "path_policy": "required-regular-non-symlink-in-root",
+        "publication_metadata_bytes_verified": False,
+        "status": "path-policy-verified",
+    }
+
+
+def _verify_export_manifest(
+    checkpoint: Path,
+    *,
+    hub_release: bool = False,
+) -> dict[str, Any]:
     checkpoint = checkpoint.resolve()
     candidate_path = checkpoint / "cliffquant_export.json"
     if candidate_path.is_symlink():
@@ -801,11 +846,16 @@ def _verify_export_manifest(checkpoint: Path) -> dict[str, Any]:
     actual_files = {
         candidate.relative_to(checkpoint).as_posix()
         for candidate in checkpoint.rglob("*")
-        if candidate.is_file() and candidate.name != path.name
+        if (candidate.is_file() or candidate.is_symlink()) and candidate.name != path.name
     }
-    if described_files != actual_files:
-        missing = sorted(actual_files - described_files)
-        extra = sorted(described_files - actual_files)
+    if hub_release:
+        _validate_hub_release_envelope(checkpoint)
+        actual_payload_files = actual_files - set(HUB_RELEASE_ENVELOPE_FILES)
+    else:
+        actual_payload_files = actual_files
+    if described_files != actual_payload_files:
+        missing = sorted(described_files - actual_payload_files)
+        extra = sorted(actual_payload_files - described_files)
         raise ValueError(f"export file coverage mismatch; missing={missing}, extra={extra}")
 
     quantize_config_path = checkpoint / "quantize_config.json"
@@ -973,11 +1023,15 @@ def validate_exported_checkpoint_identity(value: Any) -> dict[str, Any]:
     return json.loads(canonical_json_bytes(dict(value)))
 
 
-def describe_exported_checkpoint(checkpoint_dir: str | Path) -> dict[str, Any]:
-    """Re-hash and describe every byte in a strict CliffQuant GPTQ export."""
+def describe_exported_checkpoint(
+    checkpoint_dir: str | Path,
+    *,
+    hub_release: bool = False,
+) -> dict[str, Any]:
+    """Re-hash the immutable payload of a strict or explicitly staged Hub export."""
 
     checkpoint = Path(checkpoint_dir).resolve()
-    export_manifest = _verify_export_manifest(checkpoint)
+    export_manifest = _verify_export_manifest(checkpoint, hub_release=hub_release)
     identity = _checkpoint_identity(checkpoint, export_manifest)
     return validate_exported_checkpoint_identity(identity)
 
@@ -1322,6 +1376,7 @@ def load_verification_report(
     *,
     checkpoint_dir: str | Path,
     require_clean_environment: bool = False,
+    hub_release: bool = False,
 ) -> dict[str, Any]:
     """Validate a canonical report against live checkpoint and verifier bytes."""
 
@@ -1338,7 +1393,7 @@ def load_verification_report(
     if report.get("status") != "pass":
         raise ValueError("verification report did not pass")
     checkpoint = validate_exported_checkpoint_identity(report.get("checkpoint_identity"))
-    live_checkpoint = describe_exported_checkpoint(checkpoint_root)
+    live_checkpoint = describe_exported_checkpoint(checkpoint_root, hub_release=hub_release)
     if checkpoint != live_checkpoint:
         raise ValueError("verification report checkpoint differs from live checkpoint bytes")
     if schema == VERIFICATION_SCHEMA:
@@ -1349,7 +1404,13 @@ def load_verification_report(
             checkpoint=checkpoint,
             require_clean_environment=require_clean_environment,
         )
-    return report
+    if not hub_release:
+        return report
+    return {
+        "publication_envelope": _validate_hub_release_envelope(checkpoint_root),
+        "report": report,
+        "status": "model-payload-verified",
+    }
 
 
 def _verify_auxiliary_files(base: Path, output: Path) -> list[dict[str, Any]]:
