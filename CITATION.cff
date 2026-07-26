@@ -10,8 +10,8 @@ license: Apache-2.0
 repository-code: "https://github.com/Labeeb2339/cliffquant"
 url: "https://github.com/Labeeb2339/cliffquant"
 abstract: >-
-  Correctness-first exhaustive FP16 scale selection for a frozen diagonal
-  quantization proxy.
+  Exact minimax FP16 scale selection for a frozen multi-environment diagonal
+  quantization proxy, checked against exhaustive reference enumeration.
 keywords:
   - quantization
   - W4A16
