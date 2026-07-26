@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any, ClassVar
@@ -18,6 +19,7 @@ from .corpus import (
     MAX_VALID_RECORDS,
     MODEL_ID,
     MODEL_REVISION,
+    SEED,
     Phase,
     build_phase_manifest,
     load_manifest,
@@ -149,9 +151,20 @@ def _token_arrays(windows: Mapping[str, Sequence[Any]]) -> dict[str, tuple[np.nd
 
 def _load_model(device: str) -> Any:
     try:
+        import torch
         from transformers import AutoModelForImageTextToText
     except ImportError as exc:
         raise RuntimeError("install transformers and PyTorch for model collection") from exc
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+    torch.manual_seed(SEED)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(SEED)
+    torch.use_deterministic_algorithms(True)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    torch.set_float32_matmul_precision("highest")
     model = AutoModelForImageTextToText.from_pretrained(
         MODEL_ID,
         revision=MODEL_REVISION,

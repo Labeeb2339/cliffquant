@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import importlib.metadata
 import json
+import os
 import platform
 import sys
 from collections.abc import Mapping
@@ -108,10 +109,14 @@ def runtime_metadata(
                 accelerator.update(
                     {
                         "capability": list(torch.cuda.get_device_capability(index)),
+                        "cublas_workspace_config": os.environ.get("CUBLAS_WORKSPACE_CONFIG"),
                         "cudnn_benchmark": bool(torch.backends.cudnn.benchmark),
                         "cudnn_deterministic": bool(torch.backends.cudnn.deterministic),
+                        "cudnn_allow_tf32": bool(torch.backends.cudnn.allow_tf32),
                         "cudnn_version": torch.backends.cudnn.version(),
                         "device_index": index,
+                        "float32_matmul_precision": torch.get_float32_matmul_precision(),
+                        "matmul_allow_tf32": bool(torch.backends.cuda.matmul.allow_tf32),
                         "name": properties.name,
                         "total_memory_bytes": properties.total_memory,
                     }

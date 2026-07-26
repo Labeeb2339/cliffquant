@@ -5,8 +5,9 @@ Status: frozen before collecting Qwen activation statistics or comparing policie
 Addendum 001-A was frozen after implementing the first loader, but before any
 real corpus or model collection. Addendum 001-B was then frozen after that
 backend failed its usability diagnostic. Addendum 001-C freezes the paired
-bootstrap arithmetic, and Addendum 001-D clarifies AbsMax terminology without
-changing its arithmetic. All four addenda were frozen before accepting any real
+bootstrap arithmetic, Addendum 001-D clarifies AbsMax terminology without
+changing its arithmetic, and Addendum 001-E freezes deterministic model
+collection settings. All five addenda were frozen before accepting any real
 model, policy, or outcome data.
 
 ## Question
@@ -229,6 +230,17 @@ real-valued target to the nearest FP16 value can choose the lower neighbor, so
 the stored scale can technically clip an extreme code. Public artifacts call
 this the **range-derived AbsMax** baseline rather than claiming that every stored
 scale is strictly no-clipping.
+
+## Addendum 001-E: deterministic activation collection
+
+This addendum was frozen on 2026-07-26 before loading the model for real
+activation collection. Both calibration and held-out collection use seed `2339`,
+PyTorch deterministic algorithms in error mode, cuBLAS workspace configuration
+`:4096:8`, cuDNN benchmarking disabled, cuDNN deterministic mode enabled, TF32
+disabled for CUDA matmul and cuDNN, and the highest float32 matmul precision
+setting. The activation artifact records these flags, the resolved parameter
+dtypes, GPU name and capability, CUDA and cuDNN runtime versions, and total
+device memory.
 
 ## Gates
 
