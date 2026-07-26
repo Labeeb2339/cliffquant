@@ -14,6 +14,7 @@ import importlib.util
 import inspect
 import json
 import os
+import shutil
 import subprocess
 import sys
 import sysconfig
@@ -36,6 +37,7 @@ from .full_model_artifacts import (
     SafetensorsWeightSource,
     ScaleRun,
     load_scale_run,
+    resolve_hf_snapshot_file,
     validate_corpus_replay_pair,
     verify_frozen_corpus_pair,
 )
@@ -61,6 +63,19 @@ from .qwen35_modules import (
 
 EXPORT_SCHEMA = "cliffquant.gptq-export.v1"
 PINNED_GPTQMODEL_VERSION = "7.3.4"
+PRESERVED_AUXILIARY_FILES = (
+    "chat_template.json",
+    "chat_template.jinja",
+    "merges.txt",
+    "preprocessor_config.json",
+    "processor_config.json",
+    "special_tokens_map.json",
+    "tokenizer.json",
+    "tokenizer.model",
+    "tokenizer_config.json",
+    "video_preprocessor_config.json",
+    "vocab.json",
+)
 
 _GPTQMODEL_MODULES = {
     "auto": "gptqmodel.models.auto",
@@ -656,6 +671,35 @@ def _output_file_hashes(root: Path) -> list[dict[str, Any]]:
     return files
 
 
+def _copy_auxiliary_files_exact(base: Path, stage: Path) -> list[dict[str, Any]]:
+    """Overwrite writer-generated support files with exact pinned base bytes."""
+
+    copied: list[dict[str, Any]] = []
+    for name in PRESERVED_AUXILIARY_FILES:
+        candidate = base / name
+        if not candidate.is_file():
+            continue
+        source = resolve_hf_snapshot_file(base, name, label="base auxiliary file")
+        destination = stage / name
+        if destination.is_symlink():
+            raise ValueError(f"GPTQModel writer created a symlinked auxiliary file: {name}")
+        shutil.copyfile(source, destination)
+        if sha256_file(destination) != sha256_file(source):
+            raise OSError(f"failed to preserve exact auxiliary file bytes: {name}")
+        copied.append(
+            {
+                "file": name,
+                "sha256": sha256_file(destination),
+                "size_bytes": destination.stat().st_size,
+            }
+        )
+    if not any(entry["file"].startswith("tokenizer") for entry in copied):
+        raise ValueError("base snapshot supplied no tokenizer artifact to preserve")
+    if not any("processor" in entry["file"] for entry in copied):
+        raise ValueError("base snapshot supplied no processor artifact to preserve")
+    return copied
+
+
 def export_full_model_gptq(
     *,
     base_model_dir: str | Path,
@@ -745,6 +789,7 @@ def export_full_model_gptq(
             f"GPTQModel writer failed; partial output is retained for diagnosis at {stage}"
         ) from exc
 
+    auxiliary_preservation = _copy_auxiliary_files_exact(base_path, stage)
     config_path = stage / "config.json"
     quant_config_path = stage / "quantize_config.json"
     if not config_path.is_file() or not quant_config_path.is_file():
@@ -778,6 +823,7 @@ def export_full_model_gptq(
             "revision": BASE_MODEL_REVISION,
             "source": dict(base_source.provenance),
         },
+        "auxiliary_preservation": auxiliary_preservation,
         "corpus_replay": corpus_replay,
         "files": _output_file_hashes(stage),
         "gptq": {

@@ -34,6 +34,7 @@ from .gptq_pack import (
 )
 from .gptqmodel_export import (
     EXPORT_SCHEMA,
+    PRESERVED_AUXILIARY_FILES,
     fp16_values_from_bits,
     load_installed_gptqmodel_contract,
     load_pinned_gptqmodel_contract,
@@ -92,19 +93,7 @@ _RUNTIME_PACKAGES = (
     "transformers",
 )
 
-_AUXILIARY_FILES = (
-    "chat_template.json",
-    "chat_template.jinja",
-    "merges.txt",
-    "preprocessor_config.json",
-    "processor_config.json",
-    "special_tokens_map.json",
-    "tokenizer.json",
-    "tokenizer.model",
-    "tokenizer_config.json",
-    "video_preprocessor_config.json",
-    "vocab.json",
-)
+_AUXILIARY_FILES = PRESERVED_AUXILIARY_FILES
 
 _FROZEN_VERIFICATION_REQUIREMENTS = (
     "accelerate==1.14.0",

@@ -25,6 +25,7 @@ from cliffquant.full_model_solve import (
 )
 from cliffquant.full_model_verify import TensorCheckpoint
 from cliffquant.gptqmodel_export import (
+    _copy_auxiliary_files_exact,
     _restore_non_target_tensors_exact,
     fp16_values_from_bits,
     quantize_rows,
@@ -650,6 +651,26 @@ def test_export_restores_non_target_tensor_dtype_and_values() -> None:
         "writer_passthrough_tensor_count": 0,
         "writer_passthrough_tensors": [],
     }
+
+
+def test_export_overwrites_auxiliary_files_with_exact_base_bytes(tmp_path: Path) -> None:
+    base = tmp_path / "base"
+    stage = tmp_path / "stage"
+    base.mkdir()
+    stage.mkdir()
+    (base / "tokenizer.json").write_bytes(b"base-tokenizer")
+    (base / "preprocessor_config.json").write_bytes(b"base-processor")
+    (stage / "tokenizer.json").write_bytes(b"writer-tokenizer")
+    (stage / "preprocessor_config.json").write_bytes(b"writer-processor")
+
+    copied = _copy_auxiliary_files_exact(base, stage)
+
+    assert (stage / "tokenizer.json").read_bytes() == b"base-tokenizer"
+    assert (stage / "preprocessor_config.json").read_bytes() == b"base-processor"
+    assert [entry["file"] for entry in copied] == [
+        "preprocessor_config.json",
+        "tokenizer.json",
+    ]
 
 
 def test_corpus_replay_pair_fingerprint_is_immutable() -> None:
