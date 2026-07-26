@@ -34,6 +34,7 @@ from .gptq_pack import (
 from .gptqmodel_export import (
     EXPORT_SCHEMA,
     fp16_values_from_bits,
+    load_installed_gptqmodel_contract,
     load_pinned_gptqmodel_contract,
     quantize_rows,
 )
@@ -1589,12 +1590,16 @@ def verify_full_model_structure(
 def load_fresh_gptq_torch(
     *,
     checkpoint_dir: str | Path,
-    gptqmodel_source: str | Path,
+    gptqmodel_source: str | Path | None = None,
     device: str,
 ) -> tuple[Any, Any]:
-    """Load a written checkpoint only through pinned GPTQ_TORCH."""
+    """Load a checkpoint through installed or explicit pinned-source GPTQ_TORCH."""
 
-    contract = load_pinned_gptqmodel_contract(gptqmodel_source)
+    contract = (
+        load_installed_gptqmodel_contract()
+        if gptqmodel_source is None
+        else load_pinned_gptqmodel_contract(gptqmodel_source)
+    )
     try:
         wrapper = contract.GPTQModel.load(
             str(Path(checkpoint_dir).resolve()),
@@ -1681,7 +1686,7 @@ def _check_generation(
 def run_text_generation_smoke(
     *,
     checkpoint_dir: str | Path,
-    gptqmodel_source: str | Path,
+    gptqmodel_source: str | Path | None = None,
     report_path: str | Path,
     prompt: str,
     environment_report: str | Path | None = None,
@@ -1748,7 +1753,7 @@ def run_text_generation_smoke(
 def run_image_generation_smoke(
     *,
     checkpoint_dir: str | Path,
-    gptqmodel_source: str | Path,
+    gptqmodel_source: str | Path | None = None,
     image_path: str | Path,
     report_path: str | Path,
     prompt: str,

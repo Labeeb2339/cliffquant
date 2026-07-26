@@ -74,6 +74,10 @@ _ALLOWED_ENVIRONMENT_KEYS = frozenset(
 )
 _SHA_PATTERN = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 _REQUIREMENT_HASH = re.compile(r"--hash=sha256:[0-9a-f]{64}")
+_CANONICAL_HASHED_LOCK_DIRECTIVES = (
+    "--require-hashes",
+    "--only-binary=:all:",
+)
 
 
 def _run(
@@ -285,11 +289,30 @@ def _package_map(lines: Sequence[str]) -> dict[str, str]:
 
 
 def _lock_is_fully_hashed(lines: Sequence[str]) -> bool:
-    package_records = [value for value in _requirement_records(lines) if not value.startswith("--")]
-    return bool(package_records) and all(
+    try:
+        _require_canonical_hashed_lock(lines)
+    except ValueError:
+        return False
+    return True
+
+
+def _require_canonical_hashed_lock(lines: Sequence[str]) -> list[str]:
+    records = _requirement_records(lines)
+    directive_count = len(_CANONICAL_HASHED_LOCK_DIRECTIVES)
+    if tuple(records[:directive_count]) != _CANONICAL_HASHED_LOCK_DIRECTIVES or any(
+        value.startswith("-") for value in records[directive_count:]
+    ):
+        raise ValueError(
+            "verification hashed lock must begin with exactly --require-hashes and "
+            "--only-binary=:all: and contain no other directives"
+        )
+    package_records = records[directive_count:]
+    if not package_records or not all(
         any(_REQUIREMENT_HASH.fullmatch(option) for option in value.split()[1:])
         for value in package_records
-    )
+    ):
+        raise ValueError("verification lock must hash every package for wheelhouse mode")
+    return package_records
 
 
 def _git_output(
@@ -391,6 +414,7 @@ def _dependency_install_command(
     command = _isolated_pip_command(
         python,
         "install",
+        "--quiet",
         "--no-cache-dir",
         "--no-deps",
     )
@@ -404,8 +428,7 @@ def _dependency_install_command(
     else:
         if not wheelhouse.is_dir():
             raise FileNotFoundError(f"verification wheelhouse does not exist: {wheelhouse}")
-        if not _lock_is_fully_hashed(lines):
-            raise ValueError("verification lock must hash every package for wheelhouse mode")
+        _require_canonical_hashed_lock(lines)
         command.extend(
             [
                 "--no-index",
@@ -498,20 +521,34 @@ def _wheelhouse_identity(
     hashed_lock: Path,
     hashed_lock_logical_name: str,
 ) -> dict[str, Any]:
+    wheelhouse_root = wheelhouse.resolve(strict=True)
+    if not wheelhouse_root.is_dir():
+        raise FileNotFoundError(f"verification wheelhouse does not exist: {wheelhouse_root}")
     entries = sorted(
-        wheelhouse.iterdir(),
+        wheelhouse_root.iterdir(),
         key=lambda item: (item.name.casefold(), item.name),
     )
     if not entries:
         raise ValueError("verification wheelhouse contains no wheels")
-    invalid = [
-        entry.name for entry in entries if not entry.is_file() or entry.suffix.casefold() != ".whl"
-    ]
+    invalid: list[str] = []
+    resolved_entries: list[tuple[str, Path]] = []
+    for entry in entries:
+        if entry.is_symlink() or not entry.is_file() or entry.suffix.casefold() != ".whl":
+            invalid.append(entry.name)
+            continue
+        resolved = entry.resolve(strict=True)
+        if resolved.parent != wheelhouse_root:
+            invalid.append(entry.name)
+            continue
+        resolved_entries.append((entry.name, resolved))
     if invalid:
         raise ValueError(
-            "verification wheelhouse must contain only wheel files: " + ", ".join(invalid)
+            "verification wheelhouse must contain only regular in-directory wheel files: "
+            + ", ".join(invalid)
         )
-    files = [_file_descriptor(path) for path in entries]
+    files = [
+        _file_descriptor(path, logical_name=logical_name) for logical_name, path in resolved_entries
+    ]
     payload = {
         "files": files,
         "hashed_lock": _file_descriptor(
@@ -948,8 +985,7 @@ def run_clean_verification(
             "text",
             "--checkpoint",
             checkpoint,
-            "--gptqmodel-source",
-            gptqmodel_source,
+            "--installed-gptqmodel",
             "--report",
             text_report,
             "--environment-report",
@@ -979,8 +1015,7 @@ def run_clean_verification(
                 "image",
                 "--checkpoint",
                 checkpoint,
-                "--gptqmodel-source",
-                gptqmodel_source,
+                "--installed-gptqmodel",
                 "--image",
                 image,
                 "--report",

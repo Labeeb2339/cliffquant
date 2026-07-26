@@ -36,7 +36,17 @@ def _parser() -> argparse.ArgumentParser:
         help="fresh-load once, generate twice, and persist deterministic finite text evidence",
     )
     text.add_argument("--checkpoint", type=Path, required=True)
-    text.add_argument("--gptqmodel-source", type=Path, required=True)
+    text_gptqmodel = text.add_mutually_exclusive_group(required=True)
+    text_gptqmodel.add_argument(
+        "--gptqmodel-source",
+        type=Path,
+        help="explicit clean checkout of the pinned GPTQModel commit",
+    )
+    text_gptqmodel.add_argument(
+        "--installed-gptqmodel",
+        action="store_true",
+        help="load only the pinned GPTQModel distribution installed in the active venv",
+    )
     text.add_argument("--report", type=Path, required=True)
     text.add_argument(
         "--environment-report",
@@ -52,7 +62,17 @@ def _parser() -> argparse.ArgumentParser:
         help="load once, generate twice, and persist finite deterministic image-text evidence",
     )
     image.add_argument("--checkpoint", type=Path, required=True)
-    image.add_argument("--gptqmodel-source", type=Path, required=True)
+    image_gptqmodel = image.add_mutually_exclusive_group(required=True)
+    image_gptqmodel.add_argument(
+        "--gptqmodel-source",
+        type=Path,
+        help="explicit clean checkout of the pinned GPTQModel commit",
+    )
+    image_gptqmodel.add_argument(
+        "--installed-gptqmodel",
+        action="store_true",
+        help="load only the pinned GPTQModel distribution installed in the active venv",
+    )
     image.add_argument("--image", type=Path, required=True)
     image.add_argument("--report", type=Path, required=True)
     image.add_argument(

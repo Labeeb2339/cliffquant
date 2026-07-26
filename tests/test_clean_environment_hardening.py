@@ -103,7 +103,8 @@ def test_hashed_wheelhouse_command_is_offline_and_binary_only(tmp_path: Path) ->
     lock = tmp_path / "lock.txt"
     digest = "a" * 64
     lock.write_text(
-        "--extra-index-url https://download.pytorch.org/whl/cu128\n"
+        "--require-hashes\n"
+        "--only-binary=:all:\n"
         "example-package==1.2.3 \\\n"
         f"    --hash=sha256:{digest}\n",
         encoding="utf-8",
@@ -129,6 +130,7 @@ def test_hashed_wheelhouse_command_is_offline_and_binary_only(tmp_path: Path) ->
     ]
     for option in ("--no-index", "--require-hashes", "--only-binary=:all:"):
         assert option in command
+    assert "--quiet" in command
     assert command[command.index("--find-links") + 1] == wheelhouse
 
 
@@ -136,7 +138,10 @@ def test_publication_dependency_install_refuses_unhashed_or_online_mode(
     tmp_path: Path,
 ) -> None:
     lock = tmp_path / "lock.txt"
-    lock.write_text("numpy==2.2.6\n", encoding="utf-8")
+    lock.write_text(
+        "--require-hashes\n--only-binary=:all:\nnumpy==2.2.6\n",
+        encoding="utf-8",
+    )
     wheelhouse = tmp_path / "wheelhouse"
     wheelhouse.mkdir()
 
@@ -162,6 +167,69 @@ def test_publication_dependency_install_refuses_unhashed_or_online_mode(
     )
     assert "--require-hashes" not in compatibility
     assert compatibility[-2:] == ["--requirement", lock]
+
+
+@pytest.mark.parametrize(
+    "directive",
+    [
+        "--find-links https://attacker.invalid/wheels",
+        "--find-links C:/untrusted/wheels",
+        "--index-url https://attacker.invalid/simple",
+        "--extra-index-url https://attacker.invalid/simple",
+        "--trusted-host attacker.invalid",
+        "--requirement C:/untrusted/extra.txt",
+    ],
+)
+def test_publication_dependency_install_rejects_every_noncanonical_lock_directive(
+    tmp_path: Path,
+    directive: str,
+) -> None:
+    lock = tmp_path / "lock.txt"
+    lock.write_text(
+        f"--require-hashes\n--only-binary=:all:\n{directive}\ndemo==1.0 --hash=sha256:{'a' * 64}\n",
+        encoding="utf-8",
+    )
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+
+    assert not _lock_is_fully_hashed(lock.read_text(encoding="utf-8").splitlines())
+    with pytest.raises(ValueError, match="contain no other directives"):
+        _dependency_install_command(
+            Path("python"),
+            lock=lock,
+            wheelhouse=wheelhouse,
+            allow_unhashed_lock=False,
+        )
+
+
+@pytest.mark.parametrize(
+    "prefix",
+    [
+        "",
+        "--require-hashes\n",
+        "--only-binary=:all:\n--require-hashes\n",
+        "--require-hashes\n--require-hashes\n--only-binary=:all:\n",
+    ],
+)
+def test_publication_dependency_install_requires_exact_canonical_directive_prefix(
+    tmp_path: Path,
+    prefix: str,
+) -> None:
+    lock = tmp_path / "lock.txt"
+    lock.write_text(
+        prefix + f"demo==1.0 --hash=sha256:{'a' * 64}\n",
+        encoding="utf-8",
+    )
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+
+    with pytest.raises(ValueError, match="begin with exactly"):
+        _dependency_install_command(
+            Path("python"),
+            lock=lock,
+            wheelhouse=wheelhouse,
+            allow_unhashed_lock=False,
+        )
 
 
 def test_import_inventory_uses_isolated_probe_and_rejects_non_venv_origins(
@@ -332,7 +400,34 @@ def test_wheelhouse_identity_rejects_every_non_wheel_entry(tmp_path: Path) -> No
     hashed_lock = tmp_path / "verification-cu128-hashed.txt"
     hashed_lock.write_text("alpha==1 --hash=sha256:" + "a" * 64 + "\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match=r"only wheel files: README\.txt"):
+    with pytest.raises(
+        ValueError,
+        match=r"only regular in-directory wheel files: README\.txt",
+    ):
+        _wheelhouse_identity(
+            wheelhouse,
+            hashed_lock=hashed_lock,
+            hashed_lock_logical_name="requirements/verification-cu128-hashed.txt",
+        )
+
+
+def test_wheelhouse_identity_rejects_symlinked_wheel_escape(tmp_path: Path) -> None:
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    outside = tmp_path / "checkpoint"
+    outside.mkdir()
+    target = outside / "demo-1-py3-none-any.whl"
+    target.write_bytes(b"outside")
+    link = wheelhouse / target.name
+    try:
+        link.symlink_to(target)
+    except OSError as exc:
+        pytest.skip(f"wheel symlink creation is unavailable: {exc}")
+    hashed_lock = tmp_path / "verification-cu128-hashed.txt"
+    hashed_lock.write_text("demo==1 --hash=sha256:" + "a" * 64 + "\n", encoding="utf-8")
+
+    assert link.resolve().parent == outside
+    with pytest.raises(ValueError, match="regular in-directory wheel files"):
         _wheelhouse_identity(
             wheelhouse,
             hashed_lock=hashed_lock,

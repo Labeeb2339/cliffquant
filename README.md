@@ -122,6 +122,7 @@ Read the:
 
 - [frozen Experiment 001 protocol](research/EXPERIMENT_001_PROTOCOL.md);
 - [solver certification result](research/SOLVER_CERTIFICATION_001_RESULT.md);
+- [publication verification procedure](research/PUBLICATION_VERIFICATION.md);
 - [prior-art boundary](research/PRIOR_ART.md); and
 - [claim boundary](research/CLAIM_BOUNDARY.md).
 

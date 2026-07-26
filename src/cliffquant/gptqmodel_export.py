@@ -9,11 +9,14 @@ buffer can be checked immediately.
 from __future__ import annotations
 
 import importlib
+import importlib.metadata
+import importlib.util
 import inspect
 import json
 import os
 import subprocess
 import sys
+import sysconfig
 import threading
 import uuid
 from dataclasses import dataclass
@@ -57,11 +60,50 @@ from .qwen35_modules import (
 )
 
 EXPORT_SCHEMA = "cliffquant.gptq-export.v1"
+PINNED_GPTQMODEL_VERSION = "7.3.4"
+
+_GPTQMODEL_MODULES = {
+    "auto": "gptqmodel.models.auto",
+    "backend": "gptqmodel.utils.backend",
+    "config": "gptqmodel.quantization.config",
+    "constants": "gptqmodel.models._const",
+    "model_utils": "gptqmodel.utils.model",
+    "package": "gptqmodel",
+    "qlinear_base": "gptqmodel.nn_modules.qlinear",
+    "torch_linear": "gptqmodel.nn_modules.qlinear.torch",
+}
+_REQUIRED_CREATE_PARAMETERS = {
+    "backend",
+    "bits",
+    "desc_act",
+    "device",
+    "dynamic",
+    "format",
+    "group_size",
+    "linear_cls",
+    "lm_head_name",
+    "module",
+    "name",
+    "pack_dtype",
+    "submodule",
+    "sym",
+}
+_REQUIRED_PACK_PARAMETERS = {
+    "layers",
+    "lock",
+    "name",
+    "qModules",
+    "q_g_idx",
+    "q_scales",
+    "q_zeros",
+    "quant_linear_cls",
+    "quantize_config",
+}
 
 
 @dataclass(frozen=True, slots=True)
 class GPTQModelContract:
-    """Exact objects imported from the pinned GPTQModel source checkout."""
+    """Exact GPTQModel objects imported from one verified package root."""
 
     source_root: Path
     revision: str
@@ -124,6 +166,72 @@ def _ensure_windows_utf8_console() -> None:
             reconfigure(encoding="utf-8", errors="backslashreplace")
 
 
+def _is_within(path: Path, root: Path) -> bool:
+    return path == root or root in path.parents
+
+
+def _import_gptqmodel_modules(*, label: str) -> dict[str, Any]:
+    _ensure_windows_utf8_console()
+    try:
+        return {
+            logical_name: importlib.import_module(module_name)
+            for logical_name, module_name in _GPTQMODEL_MODULES.items()
+        }
+    except Exception as exc:
+        raise RuntimeError(
+            f"failed to import {label} GPTQModel and its runtime dependencies"
+        ) from exc
+
+
+def _require_module_origins(
+    modules: dict[str, Any],
+    *,
+    roots: set[Path],
+    label: str,
+) -> None:
+    for logical_name, module in modules.items():
+        raw_origin = getattr(module, "__file__", None)
+        if not isinstance(raw_origin, str):
+            raise RuntimeError(f"{label} GPTQModel module has no file origin: {logical_name}")
+        origin = Path(raw_origin).resolve()
+        if not any(_is_within(origin, root) for root in roots):
+            raise RuntimeError(
+                f"{label} GPTQModel module resolved outside the verified package root: "
+                f"{logical_name}"
+            )
+
+
+def _contract_from_modules(
+    *,
+    modules: dict[str, Any],
+    revision: str,
+    source_root: Path,
+) -> GPTQModelContract:
+    model_utils = modules["model_utils"]
+    create_signature = inspect.signature(model_utils.create_quant_module)
+    if not _REQUIRED_CREATE_PARAMETERS.issubset(create_signature.parameters):
+        raise RuntimeError("pinned create_quant_module contract is incomplete or drifted")
+    pack_signature = inspect.signature(model_utils.pack_module)
+    if not _REQUIRED_PACK_PARAMETERS.issubset(pack_signature.parameters):
+        raise RuntimeError("pinned pack_module contract is incomplete or drifted")
+    package = modules["package"]
+    return GPTQModelContract(
+        source_root=source_root,
+        revision=revision,
+        version=str(getattr(package, "__version__", "unknown")),
+        GPTQModel=modules["auto"].GPTQModel,
+        QuantizeConfig=modules["config"].QuantizeConfig,
+        METHOD=modules["config"].METHOD,
+        FORMAT=modules["config"].FORMAT,
+        BACKEND=modules["backend"].BACKEND,
+        DEVICE=modules["constants"].DEVICE,
+        TorchLinear=modules["torch_linear"].TorchLinear,
+        BaseQuantLinear=modules["qlinear_base"].BaseQuantLinear,
+        create_quant_module=model_utils.create_quant_module,
+        pack_module=model_utils.pack_module,
+    )
+
+
 def load_pinned_gptqmodel_contract(source_root: str | Path) -> GPTQModelContract:
     """Import GPTQModel only from the exact frozen source revision."""
 
@@ -147,73 +255,62 @@ def load_pinned_gptqmodel_contract(source_root: str | Path) -> GPTQModelContract
             raise RuntimeError(
                 "a different GPTQModel package is already imported; start a fresh process"
             )
-    _ensure_windows_utf8_console()
-    try:
-        package = importlib.import_module("gptqmodel")
-        auto = importlib.import_module("gptqmodel.models.auto")
-        config = importlib.import_module("gptqmodel.quantization.config")
-        backend = importlib.import_module("gptqmodel.utils.backend")
-        constants = importlib.import_module("gptqmodel.models._const")
-        model_utils = importlib.import_module("gptqmodel.utils.model")
-        torch_linear = importlib.import_module("gptqmodel.nn_modules.qlinear.torch")
-        qlinear_base = importlib.import_module("gptqmodel.nn_modules.qlinear")
-    except Exception as exc:
-        raise RuntimeError(
-            "failed to import the pinned GPTQModel checkout and its runtime dependencies"
-        ) from exc
-    loaded_path = Path(package.__file__).resolve()
-    if root not in loaded_path.parents:
-        raise RuntimeError(f"GPTQModel resolved outside the pinned checkout: {loaded_path}")
-
-    create_signature = inspect.signature(model_utils.create_quant_module)
-    required_create = {
-        "name",
-        "linear_cls",
-        "bits",
-        "desc_act",
-        "dynamic",
-        "group_size",
-        "module",
-        "submodule",
-        "sym",
-        "device",
-        "lm_head_name",
-        "pack_dtype",
-        "format",
-        "backend",
-    }
-    if not required_create.issubset(create_signature.parameters):
-        raise RuntimeError("pinned create_quant_module contract is incomplete or drifted")
-    pack_signature = inspect.signature(model_utils.pack_module)
-    required_pack = {
-        "name",
-        "qModules",
-        "q_scales",
-        "q_zeros",
-        "q_g_idx",
-        "layers",
-        "quant_linear_cls",
-        "lock",
-        "quantize_config",
-    }
-    if not required_pack.issubset(pack_signature.parameters):
-        raise RuntimeError("pinned pack_module contract is incomplete or drifted")
-
-    return GPTQModelContract(
-        source_root=root,
+    modules = _import_gptqmodel_modules(label="pinned-checkout")
+    _require_module_origins(modules, roots={root}, label="pinned-checkout")
+    return _contract_from_modules(
+        modules=modules,
         revision=revision,
-        version=str(getattr(package, "__version__", "unknown")),
-        GPTQModel=auto.GPTQModel,
-        QuantizeConfig=config.QuantizeConfig,
-        METHOD=config.METHOD,
-        FORMAT=config.FORMAT,
-        BACKEND=backend.BACKEND,
-        DEVICE=constants.DEVICE,
-        TorchLinear=torch_linear.TorchLinear,
-        BaseQuantLinear=qlinear_base.BaseQuantLinear,
-        create_quant_module=model_utils.create_quant_module,
-        pack_module=model_utils.pack_module,
+        source_root=root,
     )
+
+
+def load_installed_gptqmodel_contract() -> GPTQModelContract:
+    """Import GPTQModel only from the active venv's installed distribution."""
+
+    prefix = Path(sys.prefix).resolve()
+    base_prefix = Path(getattr(sys, "base_prefix", sys.prefix)).resolve()
+    if prefix == base_prefix:
+        raise RuntimeError(
+            "installed GPTQModel verification requires an active virtual environment"
+        )
+    roots = {
+        Path(value).resolve()
+        for key in ("purelib", "platlib")
+        if (value := sysconfig.get_path(key))
+    }
+    if not roots or any(not _is_within(root, prefix) for root in roots):
+        raise RuntimeError("active virtual environment site-packages identity drift")
+    try:
+        distribution = importlib.metadata.distribution("GPTQModel")
+    except importlib.metadata.PackageNotFoundError as exc:
+        raise RuntimeError("GPTQModel is not installed in the active virtual environment") from exc
+    if distribution.version != PINNED_GPTQMODEL_VERSION:
+        raise RuntimeError(
+            "installed GPTQModel version drift: "
+            f"expected {PINNED_GPTQMODEL_VERSION}, got {distribution.version}"
+        )
+    spec = importlib.util.find_spec("gptqmodel")
+    if spec is None or spec.origin is None:
+        raise RuntimeError("installed GPTQModel package has no import origin")
+    origin = Path(spec.origin).resolve()
+    if not any(_is_within(origin, root) for root in roots):
+        raise RuntimeError("installed GPTQModel resolves outside active venv site-packages")
+    distribution_init = Path(distribution.locate_file("gptqmodel/__init__.py")).resolve()
+    if distribution_init != origin:
+        raise RuntimeError("installed GPTQModel import does not match its distribution metadata")
+    modules = _import_gptqmodel_modules(label="installed")
+    _require_module_origins(modules, roots=roots, label="installed")
+    contract = _contract_from_modules(
+        modules=modules,
+        revision=QWEN35_GPTQMODEL_TREE_REVISION,
+        source_root=origin.parent,
+    )
+    if contract.version != PINNED_GPTQMODEL_VERSION:
+        raise RuntimeError(
+            "installed GPTQModel package version drift: "
+            f"expected {PINNED_GPTQMODEL_VERSION}, got {contract.version}"
+        )
+    return contract
 
 
 def fp16_values_from_bits(bits: NDArray[np.uint16]) -> NDArray[np.float16]:
