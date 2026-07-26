@@ -4,7 +4,9 @@ Status: frozen before collecting Qwen activation statistics or comparing policie
 
 Addendum 001-A was frozen after implementing the first loader, but before any
 real corpus or model collection. Addendum 001-B was then frozen after that
-backend failed its usability diagnostic, again before accepting any real data.
+backend failed its usability diagnostic. Addendum 001-C freezes the paired
+bootstrap arithmetic. All three addenda were frozen before accepting any real
+model, policy, or outcome data.
 
 ## Question
 
@@ -196,6 +198,27 @@ module name, output row, group index, and SHA256.
 Raw losses, paired differences, failures, runtime samples, manifests, and hashes
 are retained. Graphs are generated from those raw artifacts rather than manually
 entered values.
+
+## Addendum 001-C: module-stratified paired bootstrap
+
+This addendum was frozen on 2026-07-26 before running the 4,096-group comparison
+or accepting any real policy outcome.
+
+For each baseline independently, the per-group paired effect is the baseline's
+held-out maximum proxy loss minus CliffQuant-minimax's loss for the identical
+weight group. Modules are fixed strata: the bootstrap does not resample modules.
+Within every module, each replicate samples that module's paired effects with
+replacement, retaining the module's original sampled-group count. The sampled
+effects are averaged within each module, then those module means are
+macro-averaged with equal module weight.
+
+The interval uses exactly 10,000 replicates from NumPy PCG64. Modules are
+processed in lexicographic module-name order and groups in frozen sample-manifest
+order. The AbsMax comparison uses seed `2339`; the Pooled-WMSE comparison uses
+seed `2340`. The 2.5th and 97.5th percentiles use NumPy's linear quantile method.
+The reported paired point estimate is the same fixed-module macro mean before
+resampling. Exact zero differences are ties and are excluded from both the win
+and loss counts.
 
 ## Gates
 
