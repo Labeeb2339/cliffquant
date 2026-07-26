@@ -12,7 +12,7 @@ from typing import Any
 
 MATPLOTLIB_VERSION = "3.10.8"
 SUMMARY_SCHEMA = "cliffquant.experiment-001.proxy-summary.v1"
-FIGURE_MANIFEST_SCHEMA = "cliffquant.figures.v1"
+FIGURE_MANIFEST_SCHEMA = "cliffquant.figures.v2"
 
 BACKGROUND = "#081018"
 FOREGROUND = "#E8F0F5"
@@ -32,6 +32,12 @@ POLICIES = (
 COMPARISONS = (
     ("absmax", "vs AbsMax"),
     ("pooled_wmse", "vs Pooled-WMSE"),
+)
+NLL_ENVIRONMENTS = (
+    ("general", "General"),
+    ("code", "Code"),
+    ("math", "Math"),
+    ("multilingual", "Multilingual"),
 )
 
 
@@ -262,6 +268,158 @@ def _validated_metrics(summary: Mapping[str, Any]) -> dict[str, Any]:
         "module_count": module_count,
         "policy": policy_values,
     }
+
+
+def _validated_nll_metrics(report: Mapping[str, Any]) -> dict[str, Any]:
+    policies = report.get("policies")
+    if not isinstance(policies, Mapping):
+        raise ValueError("validated held-out NLL report has no policies object")
+    comparison = report.get("comparison")
+    if not isinstance(comparison, Mapping):
+        raise ValueError("validated held-out NLL report has no comparison object")
+    environment_deltas = comparison.get("environment_delta_cliffquant_minus_absmax")
+    if not isinstance(environment_deltas, Mapping):
+        raise ValueError("validated held-out NLL report has no environment deltas")
+    gates = report.get("gates")
+    if not isinstance(gates, Mapping):
+        raise ValueError("validated held-out NLL report has no frozen gates")
+    macro_gate = gates.get("macro")
+    environment_gate = gates.get("environment")
+    if not isinstance(macro_gate, Mapping) or not isinstance(environment_gate, Mapping):
+        raise ValueError("validated held-out NLL report has incomplete frozen gates")
+    macro_limit = _require_float(
+        macro_gate.get("limit"),
+        field="gates.macro.limit",
+        positive=True,
+    )
+    environment_limit = _require_float(
+        environment_gate.get("limit"),
+        field="gates.environment.limit",
+        positive=True,
+    )
+
+    policy_values: dict[str, Mapping[str, Any]] = {}
+    for policy in ("absmax", "cliffquant"):
+        value = policies.get(policy)
+        if not isinstance(value, Mapping):
+            raise ValueError(f"validated held-out NLL report has no {policy} policy")
+        policy_values[policy] = value
+
+    rows: list[dict[str, Any]] = []
+
+    def append_row(
+        *,
+        key: str,
+        label: str,
+        absmax_value: Any,
+        cliffquant_value: Any,
+        delta_value: Any,
+        limit: float,
+    ) -> None:
+        absmax = _require_float(absmax_value, field=f"policies.absmax.{key}", positive=True)
+        cliffquant = _require_float(
+            cliffquant_value,
+            field=f"policies.cliffquant.{key}",
+            positive=True,
+        )
+        delta = _require_float(delta_value, field=f"comparison.{key}")
+        calculated_delta = cliffquant - absmax
+        if not math.isclose(delta, calculated_delta, rel_tol=1e-10, abs_tol=1e-12):
+            raise ValueError(f"validated held-out NLL delta disagrees for {key}")
+        rows.append(
+            {
+                "absmax": absmax,
+                "cliffquant": cliffquant,
+                "delta_cliffquant_minus_absmax": delta,
+                "key": key,
+                "label": label,
+                "limit": limit,
+            }
+        )
+
+    append_row(
+        key="macro_mean_nll",
+        label="Macro mean",
+        absmax_value=policy_values["absmax"].get("macro_mean_nll"),
+        cliffquant_value=policy_values["cliffquant"].get("macro_mean_nll"),
+        delta_value=comparison.get("macro_delta_cliffquant_minus_absmax"),
+        limit=macro_limit,
+    )
+    for environment, label in NLL_ENVIRONMENTS:
+        absmax_environment = policy_values["absmax"].get(environment)
+        cliffquant_environment = policy_values["cliffquant"].get(environment)
+        if not isinstance(absmax_environment, Mapping) or not isinstance(
+            cliffquant_environment,
+            Mapping,
+        ):
+            raise ValueError(f"validated held-out NLL report has no {environment} metrics")
+        append_row(
+            key=environment,
+            label=label,
+            absmax_value=absmax_environment.get("mean_nll"),
+            cliffquant_value=cliffquant_environment.get("mean_nll"),
+            delta_value=environment_deltas.get(environment),
+            limit=environment_limit,
+        )
+
+    status = report.get("status")
+    if status not in {"pass", "fail"}:
+        raise ValueError("validated held-out NLL report status must be pass or fail")
+    return {
+        "rows": rows,
+        "status": status,
+    }
+
+
+def verify_and_load_nll_result(
+    input_dir: Path,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Run the canonical validator, then bind the exact report and raw evidence bytes."""
+
+    from cliffquant.heldout_nll import validate_heldout_nll_result
+
+    root = input_dir.resolve()
+    report = validate_heldout_nll_result(root)
+    if not isinstance(report, Mapping):
+        raise ValueError("held-out NLL validator did not return a report object")
+
+    report_path = _checked_member(root, "heldout-nll.json")
+    report_bytes = report_path.read_bytes()
+    if _parse_json(report_bytes, source="heldout-nll.json") != report:
+        raise ValueError("heldout-nll.json changed after validation")
+
+    raw_evidence = report.get("raw_evidence")
+    if not isinstance(raw_evidence, Mapping):
+        raise ValueError("validated held-out NLL report has no raw evidence")
+    raw_file = raw_evidence.get("file")
+    if not isinstance(raw_file, str):
+        raise ValueError("validated held-out NLL report has no raw evidence file")
+    raw_path = _checked_member(root, raw_file)
+    raw_descriptor = {
+        "file": raw_file,
+        "sha256": _sha256_file(raw_path),
+        "size_bytes": raw_path.stat().st_size,
+    }
+    if raw_descriptor["sha256"] != raw_evidence.get("sha256") or raw_descriptor[
+        "size_bytes"
+    ] != raw_evidence.get("size_bytes"):
+        raise ValueError("held-out NLL raw evidence changed after validation")
+
+    hashes_path = _checked_member(root, "heldout-nll.sha256.json")
+    provenance = {
+        "checksums_manifest": {
+            "file": hashes_path.name,
+            "sha256": _sha256_file(hashes_path),
+            "size_bytes": hashes_path.stat().st_size,
+        },
+        "raw_evidence": raw_descriptor,
+        "report": {
+            "file": report_path.name,
+            "sha256": _sha256_bytes(report_bytes),
+            "size_bytes": len(report_bytes),
+        },
+    }
+    return dict(report), provenance
 
 
 def _plotting() -> tuple[Any, Any, Any]:
@@ -562,6 +720,209 @@ def _paired_figure(metrics: Mapping[str, Any], destination: Path) -> None:
     plt.close(figure)
 
 
+def _heldout_nll_figure(metrics: Mapping[str, Any], destination: Path) -> None:
+    _, plt, ticker = _plotting()
+    _apply_style(plt)
+    figure = plt.figure()
+    grid = figure.add_gridspec(
+        1,
+        2,
+        width_ratios=(1.0, 1.12),
+        left=0.17,
+        right=0.94,
+        top=0.76,
+        bottom=0.2,
+        wspace=0.28,
+    )
+    absolute_axis = figure.add_subplot(grid[0])
+    delta_axis = figure.add_subplot(grid[1])
+
+    rows = metrics["rows"]
+    positions = list(range(len(rows)))
+    labels = [str(row["label"]) for row in rows]
+    absmax_values = [float(row["absmax"]) for row in rows]
+    cliffquant_values = [float(row["cliffquant"]) for row in rows]
+
+    for position, (absmax, cliffquant) in enumerate(
+        zip(absmax_values, cliffquant_values, strict=True)
+    ):
+        absolute_axis.hlines(
+            position,
+            min(absmax, cliffquant),
+            max(absmax, cliffquant),
+            color=GRID,
+            linewidth=2.0,
+            zorder=1,
+        )
+        absolute_axis.scatter(
+            absmax,
+            position,
+            color=ABS_MAX,
+            edgecolor=BACKGROUND,
+            linewidth=1.0,
+            s=74,
+            marker="o",
+            zorder=3,
+        )
+        absolute_axis.scatter(
+            cliffquant,
+            position,
+            color=CLIFF,
+            edgecolor=BACKGROUND,
+            linewidth=1.0,
+            s=74,
+            marker="s",
+            zorder=3,
+        )
+        absolute_axis.annotate(
+            f"{absmax:.5f}",
+            xy=(absmax, position),
+            xytext=(0, -14),
+            textcoords="offset points",
+            ha="center",
+            va="top",
+            color=MUTED,
+            fontsize=9.5,
+        )
+        absolute_axis.annotate(
+            f"{cliffquant:.5f}",
+            xy=(cliffquant, position),
+            xytext=(0, 14),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            color=FOREGROUND,
+            fontsize=9.5,
+        )
+
+    maximum_nll = max((*absmax_values, *cliffquant_values))
+    absolute_axis.set_xlim(0.0, maximum_nll * 1.08)
+    absolute_axis.set_yticks(positions, labels=labels)
+    absolute_axis.invert_yaxis()
+    absolute_axis.xaxis.set_major_locator(ticker.MaxNLocator(nbins=5, min_n_ticks=4))
+    absolute_axis.xaxis.set_major_formatter(ticker.FormatStrFormatter("%.2f"))
+    absolute_axis.set_xlabel("Mean token NLL from zero", labelpad=14)
+    absolute_axis.set_title(
+        "Absolute NLL",
+        loc="left",
+        pad=18,
+        fontsize=13,
+        fontweight="medium",
+    )
+    absolute_axis.scatter([], [], color=ABS_MAX, marker="o", s=64, label="AbsMax")
+    absolute_axis.scatter([], [], color=CLIFF, marker="s", s=64, label="CliffQuant")
+    absolute_axis.legend(
+        loc="lower right",
+        bbox_to_anchor=(1.0, 1.02),
+        frameon=False,
+        ncol=2,
+        borderaxespad=0.0,
+        columnspacing=1.6,
+        handletextpad=0.5,
+    )
+    _finish_axis(absolute_axis)
+
+    deltas = [float(row["delta_cliffquant_minus_absmax"]) for row in rows]
+    limits = [float(row["limit"]) for row in rows]
+    delta_extent = max((*[abs(value) for value in deltas], *limits)) * 1.22
+    delta_axis.axvline(0.0, color=FOREGROUND, linewidth=1.0, alpha=0.7, zorder=1)
+    for position, (delta, limit) in enumerate(zip(deltas, limits, strict=True)):
+        delta_axis.hlines(
+            position,
+            0.0,
+            limit,
+            color=GRID,
+            linewidth=2.0,
+            zorder=1,
+        )
+        delta_axis.scatter(
+            limit,
+            position,
+            color=ABS_MAX,
+            marker="|",
+            linewidth=2.2,
+            s=190,
+            zorder=2,
+        )
+        delta_axis.hlines(
+            position,
+            min(0.0, delta),
+            max(0.0, delta),
+            color=CLIFF,
+            linewidth=3.0,
+            zorder=3,
+        )
+        delta_axis.scatter(
+            delta,
+            position,
+            color=CLIFF,
+            edgecolor=BACKGROUND,
+            linewidth=1.0,
+            s=82,
+            marker="D",
+            zorder=4,
+        )
+        delta_axis.annotate(
+            f"{delta:+.5f}",
+            xy=(delta, position),
+            xytext=(8 if delta >= 0.0 else -8, 0),
+            textcoords="offset points",
+            ha="left" if delta >= 0.0 else "right",
+            va="center",
+            color=FOREGROUND,
+            fontsize=10,
+            fontweight="medium",
+        )
+
+    delta_axis.set_xlim(-delta_extent, delta_extent)
+    delta_axis.set_yticks(positions, labels=[""] * len(rows))
+    delta_axis.invert_yaxis()
+    delta_axis.xaxis.set_major_locator(ticker.MaxNLocator(nbins=5, min_n_ticks=5))
+    delta_axis.xaxis.set_major_formatter(ticker.FormatStrFormatter("%+.3f"))
+    delta_axis.set_xlabel(
+        "CliffQuant - AbsMax NLL delta (negative favors CliffQuant)",
+        labelpad=14,
+    )
+    delta_axis.set_title(
+        "Paired delta against frozen limits",
+        loc="left",
+        pad=18,
+        fontsize=13,
+        fontweight="medium",
+    )
+    _finish_axis(delta_axis)
+
+    figure.text(
+        0.07,
+        0.925,
+        "Held-out language-model loss",
+        fontsize=23,
+        fontweight="medium",
+        color=FOREGROUND,
+    )
+    figure.text(
+        0.07,
+        0.87,
+        "Absolute values use a zero baseline; the delta panel is scaled to the frozen limits.",
+        fontsize=11.5,
+        color=MUTED,
+    )
+    figure.text(
+        0.07,
+        0.07,
+        (
+            f"Frozen publication limits: macro <= +{limits[0]:.3f} NLL; "
+            f"each environment <= +{limits[1]:.3f} NLL. "
+            "Vertical ticks mark the applicable limit."
+        ),
+        fontsize=10.5,
+        color=MUTED,
+    )
+
+    _save_figure(figure, destination, width=2400, height=1450)
+    plt.close(figure)
+
+
 def _png_dimensions(path: Path) -> tuple[int, int]:
     header = path.read_bytes()[:24]
     if len(header) != 24 or header[:8] != b"\x89PNG\r\n\x1a\n":
@@ -569,9 +930,19 @@ def _png_dimensions(path: Path) -> tuple[int, int]:
     return struct.unpack(">II", header[16:24])
 
 
-def generate_figures(input_dir: Path, output_dir: Path) -> dict[str, Any]:
+def generate_figures(
+    input_dir: Path,
+    output_dir: Path,
+    *,
+    nll_input_dir: Path | None = None,
+) -> dict[str, Any]:
     summary, provenance = verify_and_load_summary(input_dir)
     metrics = _validated_metrics(summary)
+    nll_metrics: dict[str, Any] | None = None
+    nll_provenance: dict[str, Any] | None = None
+    if nll_input_dir is not None:
+        nll_report, nll_provenance = verify_and_load_nll_result(nll_input_dir)
+        nll_metrics = _validated_nll_metrics(nll_report)
 
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -579,8 +950,12 @@ def generate_figures(input_dir: Path, output_dir: Path) -> dict[str, Any]:
         "policy_worst_environment": output_dir / "proxy-policy-comparison.png",
         "paired_evidence": output_dir / "proxy-paired-evidence.png",
     }
+    if nll_metrics is not None:
+        destinations["heldout_nll_comparison"] = output_dir / "heldout-nll-comparison.png"
     _policy_figure(metrics, destinations["policy_worst_environment"])
     _paired_figure(metrics, destinations["paired_evidence"])
+    if nll_metrics is not None:
+        _heldout_nll_figure(nll_metrics, destinations["heldout_nll_comparison"])
 
     outputs: dict[str, dict[str, Any]] = {}
     for logical_name, path in sorted(destinations.items()):
@@ -593,8 +968,11 @@ def generate_figures(input_dir: Path, output_dir: Path) -> dict[str, Any]:
             "width_px": width,
         }
 
+    manifest_data = dict(metrics)
+    if nll_metrics is not None:
+        manifest_data["heldout_nll"] = nll_metrics
     manifest = {
-        "data": metrics,
+        "data": manifest_data,
         "figures": outputs,
         "generator": {
             "matplotlib": MATPLOTLIB_VERSION,
@@ -604,6 +982,8 @@ def generate_figures(input_dir: Path, output_dir: Path) -> dict[str, Any]:
         "input": provenance,
         "schema": FIGURE_MANIFEST_SCHEMA,
     }
+    if nll_provenance is not None:
+        manifest["nll_input"] = nll_provenance
     manifest_path = output_dir / "figure-manifest.json"
     manifest_payload = (
         json.dumps(manifest, sort_keys=True, ensure_ascii=True, separators=(",", ":")) + "\n"
@@ -631,12 +1011,24 @@ def _parser() -> argparse.ArgumentParser:
         default=repository_root / "figures",
         help="Destination for PNG figures and figure-manifest.json.",
     )
+    parser.add_argument(
+        "--nll-input-dir",
+        type=Path,
+        help=(
+            "Validated held-out NLL result directory. When provided, also generate "
+            "heldout-nll-comparison.png."
+        ),
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
-    manifest = generate_figures(arguments.input_dir, arguments.output_dir)
+    manifest = generate_figures(
+        arguments.input_dir,
+        arguments.output_dir,
+        nll_input_dir=arguments.nll_input_dir,
+    )
     for figure in manifest["figures"].values():
         print(f"{figure['sha256']}  {figure['file']}")
     return 0
