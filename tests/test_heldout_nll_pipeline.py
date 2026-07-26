@@ -1141,6 +1141,7 @@ def test_runtime_rejects_each_deterministic_cuda_contract_drift(
             package_names=tuple(heldout_nll._NLL_RUNTIME_PACKAGE_VERSIONS),
         ),
         "batch_size": 1,
+        "dequantized_weight_cache": True,
         "teacher_forcing": True,
     }
     runtime["accelerator"][field] = forged_value

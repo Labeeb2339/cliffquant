@@ -1096,6 +1096,7 @@ def _require_deterministic_cuda_runtime(
         not isinstance(runtime, Mapping)
         or runtime.get("device") != device
         or runtime.get("batch_size") != batch_size
+        or runtime.get("dequantized_weight_cache") is not True
         or runtime.get("teacher_forcing") is not True
     ):
         raise ValueError("publication NLL runtime does not match the requested rerun")

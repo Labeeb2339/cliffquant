@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import functools
+import os
 import types
 from pathlib import Path
 from typing import Any
@@ -155,6 +157,146 @@ def test_broken_installed_distribution_cannot_fall_back_to_checkout_source(
         )
 
     assert source_called is False
+
+
+@pytest.mark.parametrize("cache_dequantized_weights", [False, True])
+def test_fresh_load_strictly_unwraps_dequantizers_without_mutating_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cache_dequantized_weights: bool,
+) -> None:
+    class BaseQuantLinear:
+        pass
+
+    class TorchLinear(BaseQuantLinear):
+        def __init__(self) -> None:
+            self._cache_enabled = False
+            self._cached_weights: dict[object, object] = {}
+
+        def dequantize_weight(self, num_itr: int = 1) -> int:
+            return num_itr
+
+        def enable_weight_cache(self, enabled: bool = True) -> TorchLinear:
+            self._cache_enabled = enabled
+            if not enabled:
+                self._cached_weights.clear()
+            return self
+
+    modules = [TorchLinear() for _ in range(150)]
+    for module in modules:
+        eager = module.dequantize_weight
+
+        @functools.wraps(eager)
+        def compiled(
+            num_itr: int = 1,
+            *,
+            _eager: object = eager,
+        ) -> object:
+            return _eager(num_itr)  # type: ignore[operator]
+
+        module.dequantize_weight = compiled  # type: ignore[method-assign]
+
+    class Model:
+        def named_modules(self) -> list[tuple[str, TorchLinear]]:
+            return [(f"layer.{index}", module) for index, module in enumerate(modules)]
+
+    class GPTQModel:
+        @staticmethod
+        def load(*args: object, **kwargs: object) -> types.SimpleNamespace:
+            assert os.environ["TORCH_COMPILE_DISABLE"] == "preserve-me"
+            assert args == (str(tmp_path.resolve()),)
+            assert kwargs == {
+                "backend": "torch",
+                "device": "cuda:0",
+                "local_files_only": True,
+                "trust_remote_code": False,
+            }
+            return types.SimpleNamespace(model=Model())
+
+    contract = types.SimpleNamespace(
+        BACKEND=types.SimpleNamespace(GPTQ_TORCH="torch"),
+        BaseQuantLinear=BaseQuantLinear,
+        GPTQModel=GPTQModel,
+        TorchLinear=TorchLinear,
+    )
+    monkeypatch.setattr(
+        verification,
+        "load_pinned_gptqmodel_contract",
+        lambda _source: contract,
+    )
+    monkeypatch.setenv("TORCH_COMPILE_DISABLE", "preserve-me")
+
+    loaded_contract, wrapper = verification.load_fresh_gptq_torch(
+        checkpoint_dir=tmp_path,
+        gptqmodel_source=tmp_path / "source",
+        device="cuda:0",
+        cache_dequantized_weights=cache_dequantized_weights,
+    )
+
+    assert loaded_contract is contract
+    assert wrapper.model is not None
+    assert os.environ["TORCH_COMPILE_DISABLE"] == "preserve-me"
+    assert all(module._cache_enabled is cache_dequantized_weights for module in modules)
+    assert all(
+        getattr(module.dequantize_weight, "__func__", None)
+        is TorchLinear.dequantize_weight
+        for module in modules
+    )
+
+
+def test_fresh_load_rejects_compiled_dequantizer_without_original_bound_method(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BaseQuantLinear:
+        pass
+
+    class TorchLinear(BaseQuantLinear):
+        def dequantize_weight(self, num_itr: int = 1) -> int:
+            return num_itr
+
+    modules = [TorchLinear() for _ in range(150)]
+    for module in modules:
+        eager = module.dequantize_weight
+
+        @functools.wraps(eager)
+        def compiled(
+            num_itr: int = 1,
+            *,
+            _eager: object = eager,
+        ) -> object:
+            return _eager(num_itr)  # type: ignore[operator]
+
+        module.dequantize_weight = compiled  # type: ignore[method-assign]
+    modules[17].dequantize_weight = lambda num_itr=1: num_itr  # type: ignore[method-assign]
+    model = types.SimpleNamespace(
+        named_modules=lambda: [
+            (f"layer.{index}", module) for index, module in enumerate(modules)
+        ]
+    )
+    contract = types.SimpleNamespace(
+        BACKEND=types.SimpleNamespace(GPTQ_TORCH="torch"),
+        BaseQuantLinear=BaseQuantLinear,
+        GPTQModel=types.SimpleNamespace(
+            load=lambda *_args, **_kwargs: types.SimpleNamespace(model=model)
+        ),
+        TorchLinear=TorchLinear,
+    )
+    monkeypatch.setattr(
+        verification,
+        "load_pinned_gptqmodel_contract",
+        lambda _source: contract,
+    )
+    monkeypatch.delenv("TORCH_COMPILE_DISABLE", raising=False)
+
+    with pytest.raises(RuntimeError, match=r"compiled TorchLinear dequantizer: layer\.17"):
+        verification.load_fresh_gptq_torch(
+            checkpoint_dir=tmp_path,
+            gptqmodel_source=tmp_path / "source",
+            device="cuda:0",
+        )
+
+    assert "TORCH_COMPILE_DISABLE" not in os.environ
 
 
 def test_smoke_cli_requires_one_explicit_gptqmodel_mode() -> None:

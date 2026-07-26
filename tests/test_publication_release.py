@@ -56,6 +56,7 @@ def _fake_nll_report() -> dict[str, Any]:
         "runtime": {
             "accelerator": accelerator,
             "batch_size": 1,
+            "dequantized_weight_cache": True,
             "device": "cuda:0",
             "teacher_forcing": True,
         },

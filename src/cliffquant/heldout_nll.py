@@ -242,6 +242,7 @@ def _evaluate_checkpoint(
         checkpoint_dir=checkpoint,
         gptqmodel_source=gptqmodel_source,
         device=device,
+        cache_dequantized_weights=True,
     )
     model = wrapper.model
     model.eval()
@@ -358,6 +359,7 @@ def _compare_heldout_nll_into_directory(
             package_names=tuple(_NLL_RUNTIME_PACKAGE_VERSIONS),
         ),
         "batch_size": batch_size,
+        "dequantized_weight_cache": True,
         "teacher_forcing": True,
     }
     _validate_runtime(evaluation_runtime)
@@ -750,6 +752,7 @@ def _reject_symlink_path_components(path: Path, *, label: str) -> None:
 def _validate_runtime(value: Any) -> None:
     common_fields = {
         "batch_size",
+        "dequantized_weight_cache",
         "device",
         "implementation",
         "machine",
@@ -772,6 +775,7 @@ def _validate_runtime(value: Any) -> None:
     if (
         type(runtime["batch_size"]) is not int
         or runtime["batch_size"] <= 0
+        or runtime["dequantized_weight_cache"] is not True
         or runtime["teacher_forcing"] is not True
     ):
         raise ValueError("held-out NLL runtime evaluation contract drift")

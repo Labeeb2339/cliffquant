@@ -1661,9 +1661,18 @@ def load_fresh_gptq_torch(
     checkpoint_dir: str | Path,
     gptqmodel_source: str | Path | None = None,
     device: str,
+    cache_dequantized_weights: bool = False,
 ) -> tuple[Any, Any]:
-    """Load a checkpoint through installed or explicit pinned-source GPTQ_TORCH."""
+    """Load a checkpoint through installed or explicit pinned-source GPTQ_TORCH.
 
+    GPTQModel's TorchLinear kernel compiles its dequantizer with Inductor during
+    ``post_init``.  The pinned Windows CUDA environment has no Triton runtime.
+    Load through the unchanged standard backend first, then strictly restore the
+    original bound method carried by PyTorch's ``__wrapped__`` contract.
+    """
+
+    if type(cache_dequantized_weights) is not bool:
+        raise ValueError("cache_dequantized_weights must be a boolean")
     contract = (
         load_installed_gptqmodel_contract()
         if gptqmodel_source is None
@@ -1688,6 +1697,54 @@ def load_fresh_gptq_torch(
         raise RuntimeError(
             f"fresh GPTQ_TORCH load found {len(quantized)} quantized modules, expected 150"
         )
+    eager_dequantizers: list[tuple[str, Any, Any]] = []
+    for name, module in quantized:
+        compiled = getattr(module, "dequantize_weight", None)
+        eager = getattr(compiled, "__wrapped__", None)
+        if (
+            type(module) is not contract.TorchLinear
+            or not callable(compiled)
+            or getattr(compiled, "__self__", None) is not None
+            or not callable(eager)
+            or getattr(eager, "__wrapped__", None) is not None
+            or getattr(eager, "__self__", None) is not module
+            or getattr(eager, "__func__", None)
+            is not contract.TorchLinear.dequantize_weight
+        ):
+            raise RuntimeError(
+                "fresh GPTQ_TORCH load exposed an unexpected compiled TorchLinear "
+                f"dequantizer: {name}"
+            )
+        eager_dequantizers.append((name, module, eager))
+    for name, module, eager in eager_dequantizers:
+        module.dequantize_weight = eager
+        restored = module.dequantize_weight
+        if (
+            getattr(restored, "__self__", None) is not module
+            or getattr(restored, "__func__", None)
+            is not contract.TorchLinear.dequantize_weight
+            or getattr(restored, "__wrapped__", None) is not None
+        ):
+            raise RuntimeError(
+                f"fresh GPTQ_TORCH eager dequantizer restoration failed: {name}"
+            )
+    expected_cache_control = getattr(contract.TorchLinear, "enable_weight_cache", None)
+    for name, module in quantized:
+        cache_control = getattr(module, "enable_weight_cache", None)
+        if (
+            not callable(cache_control)
+            or getattr(cache_control, "__self__", None) is not module
+            or getattr(cache_control, "__func__", None) is not expected_cache_control
+        ):
+            raise RuntimeError(f"fresh GPTQ_TORCH weight-cache configuration failed: {name}")
+        configured = cache_control(cache_dequantized_weights)
+        if (
+            configured is not module
+            or getattr(module, "_cache_enabled", None) is not cache_dequantized_weights
+        ):
+            raise RuntimeError(f"fresh GPTQ_TORCH weight-cache configuration failed: {name}")
+        if not cache_dequantized_weights and getattr(module, "_cached_weights", None):
+            raise RuntimeError(f"fresh GPTQ_TORCH disabled weight cache was not empty: {name}")
     return contract, wrapper
 
 
