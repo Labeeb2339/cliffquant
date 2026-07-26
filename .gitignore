@@ -2,7 +2,10 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+.pytest-local-*/
 .ruff_cache/
 .venv/
+.dry-run-*/
+artifacts/
 build/
 dist/

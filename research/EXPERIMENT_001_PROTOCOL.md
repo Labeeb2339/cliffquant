@@ -2,6 +2,10 @@
 
 Status: frozen before collecting Qwen activation statistics or comparing policies.
 
+Addendum 001-A was frozen after implementing the loader, but before any real
+corpus or model collection. It resolves text-rendering and sampling details that
+the first version left implicit.
+
 ## Question
 
 Does keeping calibration environments separate during groupwise scale selection
@@ -17,7 +21,11 @@ state-of-the-art, or downstream-accuracy claim.
 - Base revision:
   `dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68`
 - Quantized modules: the GPTQModel Qwen3.5 module definition at the experiment
-  date.
+  date, pinned to commit
+  `581bfd970b8b67372ed61b0ef449d88f5388d196`.
+- Quantized inventory: exactly 150 matrices under
+  `model.language_model.layers`, totalling 497,025,024 weights and 3,883,008
+  W4/G128 groups.
 - Weight format: symmetric INT4, one scale for every 128 consecutive input
   features of each output channel.
 - Integer range: `[-8, 7]`.
@@ -26,7 +34,8 @@ state-of-the-art, or downstream-accuracy claim.
 - Activations: unquantized.
 - Activation order: disabled.
 - Unlisted modules, embeddings, normalization, convolution, vision components,
-  and biases remain at their base-model dtype.
+  biases, and the seven `mtp.layers.0` matrices remain at their base-model
+  dtype.
 
 ## Calibration environments
 
@@ -51,6 +60,38 @@ to choose the winner.
 The calibration manifest must record dataset revisions, selected row identifiers,
 rendered-text SHA256 values, token counts, tokenizer files, model revision,
 software versions, device, and every normalization constant.
+
+## Addendum 001-A: rendering and deterministic sampling
+
+The tokenizer is called with `add_special_tokens=False`. Records use these exact
+UTF-8 templates after trimming their component fields:
+
+```text
+general:       {text}\n\n
+code:          Task:\n{task}\n\nSolution:\n{solution}\n\nTests:\n{tests}\n\n
+math:          Question:\n{question}\n\nAnswer:\n{answer}\n\n
+multilingual:  Language: {lang}\nPremise:\n{premise}\n\nHypothesis:\n{hypothesis}\n\n
+```
+
+Invalid records are filtered before sampling. For each pinned source split, the
+stream loader fills a 10,000-valid-record buffer in source order, then uses
+Python's `random.Random(2339)` to emit and replace uniformly selected buffer
+slots until at most 10,000 records have been emitted or the stream ends. Original
+source offsets are retained. The bounded records are then deduplicated by
+rendered-text SHA256 and ordered by SHA256 of:
+
+```text
+seed, environment, phase, source identity, row identity, rendered-text SHA256
+```
+
+Tokens are concatenated in that order into non-overlapping 256-token windows.
+An incomplete tail is discarded before moving to another split. Multilingual
+windows are allocated equally to Arabic, Spanish, Hindi, and Chinese, then
+interleaved in that order. The manifest records buffer size, record limit,
+source offsets, text hashes, window hashes, and every segment used by a window.
+
+This is a deterministic bounded-stream sample, not a claim of uniform sampling
+over an entire dataset.
 
 ## Held-out data
 
