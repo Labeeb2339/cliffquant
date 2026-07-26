@@ -273,6 +273,27 @@ def _patch_smoke_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
         def __call__(self, *_args: Any, **_kwargs: Any) -> dict[str, object]:
             return {"input_ids": object(), "pixel_values": object()}
 
+        def apply_chat_template(
+            self,
+            conversation: list[dict[str, Any]],
+            **kwargs: Any,
+        ) -> dict[str, object]:
+            assert conversation[0]["role"] == "user"
+            assert conversation[0]["content"][0]["type"] == "image"
+            assert conversation[0]["content"][1] == {"type": "text", "text": "describe"}
+            assert kwargs == {
+                "add_generation_prompt": True,
+                "return_dict": True,
+                "return_tensors": "pt",
+                "tokenize": True,
+            }
+            return {
+                "attention_mask": object(),
+                "image_grid_thw": object(),
+                "input_ids": object(),
+                "pixel_values": object(),
+            }
+
     wrapper = types.SimpleNamespace(tokenizer=Tokenizer(), processor=Processor())
     monkeypatch.setattr(
         verification,

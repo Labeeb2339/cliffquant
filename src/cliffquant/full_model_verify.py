@@ -1914,8 +1914,33 @@ def run_image_generation_smoke(
     processor = getattr(wrapper, "processor", None)
     if not callable(processor):
         raise RuntimeError("fresh GPTQModel load did not preserve a callable processor")
+    apply_chat_template = getattr(processor, "apply_chat_template", None)
+    if not callable(apply_chat_template):
+        raise RuntimeError("fresh GPTQModel processor exposes no multimodal chat template")
     with Image.open(path) as image:
-        inputs = processor(text=prompt, images=image.convert("RGB"), return_tensors="pt")
+        conversation = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image.convert("RGB")},
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ]
+        inputs = apply_chat_template(
+            conversation,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=True,
+            return_tensors="pt",
+        )
+    if not isinstance(inputs, Mapping) or not {
+        "attention_mask",
+        "image_grid_thw",
+        "input_ids",
+        "pixel_values",
+    }.issubset(inputs):
+        raise RuntimeError("multimodal chat template returned incomplete model inputs")
     moved = _move_inputs(inputs, device)
     first = _generate_once(wrapper, moved, max_new_tokens=max_new_tokens)
     second = _generate_once(wrapper, moved, max_new_tokens=max_new_tokens)
