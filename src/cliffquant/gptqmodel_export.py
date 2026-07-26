@@ -428,6 +428,55 @@ def _load_dense_wrapper(
     return wrapper
 
 
+def _restore_non_target_tensors_exact(
+    *,
+    core_model: Any,
+    base_source: SafetensorsWeightSource,
+    target_weights: set[str],
+) -> dict[str, Any]:
+    """Restore every non-quantized state tensor to its exact base bytes and dtype."""
+
+    try:
+        import torch
+    except ImportError as exc:
+        raise RuntimeError("PyTorch is required for exact non-target restoration") from exc
+
+    current_state = core_model.state_dict(keep_vars=True)
+    expected_keys = base_source.keys - target_weights
+    missing = sorted(expected_keys - set(current_state))
+    if missing:
+        raise ValueError(f"dense wrapper omitted preserved base tensors: {missing}")
+
+    restored: list[dict[str, Any]] = []
+    for key in sorted(expected_keys):
+        current = current_state[key]
+        if current.device.type != "cpu":
+            raise RuntimeError(f"non-target tensor must remain on CPU before export: {key}")
+        with base_source._open(key) as handle:
+            exact = handle.get_tensor(key).detach().cpu().contiguous()
+        if tuple(current.shape) != tuple(exact.shape):
+            raise ValueError(f"dense wrapper changed non-target tensor shape: {key}")
+        if current.dtype != exact.dtype or not bool(torch.equal(current.detach(), exact)):
+            previous_dtype = str(current.dtype)
+            current.data = exact
+            if current.dtype != exact.dtype or not bool(torch.equal(current.detach(), exact)):
+                raise RuntimeError(f"failed to restore exact non-target tensor: {key}")
+            restored.append(
+                {
+                    "from_dtype": previous_dtype,
+                    "key": key,
+                    "shape": [int(value) for value in exact.shape],
+                    "to_dtype": str(exact.dtype),
+                }
+            )
+
+    return {
+        "checked_tensor_count": len(expected_keys),
+        "restored_tensor_count": len(restored),
+        "restored_tensors": restored,
+    }
+
+
 def _verify_packed_module(
     *,
     dense_module: Any,
@@ -640,6 +689,11 @@ def export_full_model_gptq(
         )
         packed.append({"module": name, **evidence})
 
+    non_target_preservation = _restore_non_target_tensors_exact(
+        core_model=core_model,
+        base_source=base_source,
+        target_weights={module.weight_key for module in scale_run.modules},
+    )
     wrapper.quantized = True
     wrapper.load_quantized_model = False
     wrapper.quantize_config = qcfg
@@ -713,6 +767,7 @@ def export_full_model_gptq(
             "version": contract.version,
         },
         "modules": packed,
+        "non_target_preservation": non_target_preservation,
         "policy": scale_run.policy,
         "runtime": runtime_metadata(device="cpu"),
         "scale_run": {

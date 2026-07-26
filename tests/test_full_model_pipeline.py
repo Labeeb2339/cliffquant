@@ -24,7 +24,11 @@ from cliffquant.full_model_solve import (
     solve_modules_to_artifacts,
 )
 from cliffquant.full_model_verify import TensorCheckpoint
-from cliffquant.gptqmodel_export import fp16_values_from_bits, quantize_rows
+from cliffquant.gptqmodel_export import (
+    _restore_non_target_tensors_exact,
+    fp16_values_from_bits,
+    quantize_rows,
+)
 from cliffquant.provenance import (
     canonical_array_sha256,
     canonical_json_bytes,
@@ -586,6 +590,64 @@ def test_tensor_checkpoint_reads_single_safetensors_file(tmp_path: Path) -> None
     assert checkpoint.index_path is None
     assert checkpoint.keys == frozenset({"model.weight"})
     np.testing.assert_array_equal(checkpoint.read("model.weight").numpy(), tensor)
+
+
+def test_export_restores_non_target_tensor_dtype_and_values() -> None:
+    torch = pytest.importorskip("torch")
+
+    class TinyModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.preserved = torch.nn.Parameter(torch.tensor([1.0, 2.0], dtype=torch.bfloat16))
+            self.register_buffer("already_exact", torch.tensor([3.0], dtype=torch.float32))
+            self.target = torch.nn.Linear(2, 1, bias=False, dtype=torch.bfloat16)
+
+    exact_tensors = {
+        "already_exact": torch.tensor([3.0], dtype=torch.float32),
+        "preserved": torch.tensor([1.0, 2.0], dtype=torch.float32),
+    }
+
+    class Handle:
+        def __enter__(self) -> Handle:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def get_tensor(self, key: str) -> object:
+            return exact_tensors[key].clone()
+
+    class Source:
+        keys = frozenset({"already_exact", "preserved", "target.weight"})
+
+        def _open(self, _key: str) -> Handle:
+            return Handle()
+
+    model = TinyModel()
+    original_target = model.target.weight.detach().clone()
+
+    result = _restore_non_target_tensors_exact(
+        core_model=model,
+        base_source=Source(),
+        target_weights={"target.weight"},
+    )
+
+    assert model.preserved.dtype == torch.float32
+    assert torch.equal(model.preserved.detach(), exact_tensors["preserved"])
+    assert torch.equal(model.already_exact, exact_tensors["already_exact"])
+    assert torch.equal(model.target.weight.detach(), original_target)
+    assert result == {
+        "checked_tensor_count": 2,
+        "restored_tensor_count": 1,
+        "restored_tensors": [
+            {
+                "from_dtype": "torch.bfloat16",
+                "key": "preserved",
+                "shape": [2],
+                "to_dtype": "torch.float32",
+            }
+        ],
+    }
 
 
 def test_corpus_replay_pair_fingerprint_is_immutable() -> None:
