@@ -26,6 +26,9 @@ dev = [
   "pytest>=8.0",
   "ruff>=0.6",
 ]
+figures = [
+  "matplotlib==3.10.8",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
