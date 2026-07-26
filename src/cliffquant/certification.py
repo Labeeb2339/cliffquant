@@ -193,6 +193,7 @@ def _evidence_provenance() -> dict[str, Any]:
         "contracts": package_dir / "contracts.py",
         "fp16_grid": package_dir / "fp16_grid.py",
         "objective": package_dir / "objective.py",
+        "provenance": package_dir / "provenance.py",
         "solver": package_dir / "solver.py",
     }
     repository_protocol = (

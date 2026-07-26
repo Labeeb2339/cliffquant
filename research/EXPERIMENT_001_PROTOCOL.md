@@ -7,8 +7,12 @@ real corpus or model collection. Addendum 001-B was then frozen after that
 backend failed its usability diagnostic. Addendum 001-C freezes the paired
 bootstrap arithmetic, Addendum 001-D clarifies AbsMax terminology without
 changing its arithmetic, and Addendum 001-E freezes deterministic model
-collection settings. All five addenda were frozen before accepting any real
-model, policy, or outcome data.
+collection settings. Addendum 001-F binds corpus artifacts to the exact
+collection implementation and limits tokenizer fingerprints to the frozen
+tokenizer file allow-list. Addendum 001-G closes the remaining model-byte,
+source-row replay, deterministic-runtime, and solver-runtime evidence
+boundaries. All seven addenda were frozen before accepting any real model,
+policy, or outcome data.
 
 ## Question
 
@@ -241,6 +245,58 @@ disabled for CUDA matmul and cuDNN, and the highest float32 matmul precision
 setting. The activation artifact records these flags, the resolved parameter
 dtypes, GPU name and capability, CUDA and cuDNN runtime versions, and total
 device memory.
+
+## Addendum 001-F: collection-contract and tokenizer fingerprint boundary
+
+This addendum was frozen on 2026-07-26 during resumable Dataset Viewer page
+collection, before any phase manifest, token archive, activation statistic,
+policy result, or model artifact was produced. The interrupted run had written
+only verified content-addressed response pages. Those pages remain reusable
+because their identities and canonical response hashes do not depend on
+tokenizer or collection-source metadata.
+
+The model snapshot can contain files downloaded by unrelated earlier tasks.
+Therefore tokenizer provenance fingerprints only files from the tokenizer
+allow-list requested by the collector; unrelated model weights, configuration,
+and image or video processor files are excluded. Every real phase manifest also
+records content hashes and sizes for the protocol and the semantic collection
+sources: corpus construction, Dataset Viewer loading, tokenizer/runtime
+provenance, activation statistics, Qwen module inventory, and the collection
+entry point. The strict evaluator recomputes and verifies that contract before
+accepting a corpus or diagonal artifact.
+
+## Addendum 001-G: end-to-end evidence binding
+
+This addendum was frozen on 2026-07-26 before any phase manifest, token archive,
+activation statistic, policy result, or model artifact was accepted. Two
+interrupted collection attempts had written only independently hashed Dataset
+Viewer response pages. No model forward pass or policy evaluation had started.
+
+The strict corpus loader opens every selected content-addressed cache envelope,
+verifies its request identity and canonical response hash, links every selected
+source index to the corresponding pinned row, rerenders that row, and
+retokenizes it with the exact frozen tokenizer files. It then recomputes the
+ordered records, 256-token windows, token hashes, and token arrays instead of
+accepting a self-consistent manifest alone.
+
+Activation provenance records SHA256 and size for `config.json`, the
+safetensors index, and every shard referenced by that index. Calibration and
+held-out diagonals must agree on this complete descriptor, and the descriptor
+must equal the checkpoint bytes read by the evaluator. Model ID and revision
+strings alone are insufficient.
+
+`CUBLAS_WORKSPACE_CONFIG=:4096:8` is set before any CUDA runtime query. Diagonal
+runtime provenance records seed `2339`, exact parameter dtypes, deterministic
+algorithms in error rather than warning mode, cuDNN/TF32 flags, GPU identity,
+CUDA/cuDNN versions, and path-free NumPy/BLAS build metadata. The loader rejects
+missing or relaxed settings.
+
+The 10,000-case solver certificate is valid only in the exact Python, NumPy,
+platform, and path-free NumPy/BLAS build recorded by that certificate. The
+proxy run uses a certificate generated in its own execution environment.
+Experiment execution also requires the canonical protocol file, validates
+checkpoint objects against exact field schemas, and returns a nonzero status
+when the frozen proxy gate fails.
 
 ## Gates
 

@@ -22,6 +22,8 @@ from .corpus import (
     SEED,
     Phase,
     build_phase_manifest,
+    collection_contract,
+    expected_tokenizer_metadata,
     load_manifest,
     load_pinned_rows,
     reject_manifest_overlap,
@@ -29,8 +31,22 @@ from .corpus import (
     synthetic_rows,
 )
 from .dataset_viewer import VIEWER_PAGE_SIZE
+from .model_snapshot import describe_model_snapshot
 from .provenance import canonical_json_bytes, runtime_metadata, tokenizer_metadata
 from .qwen35_modules import QWEN35_GPTQMODEL_TREE_REVISION
+
+_TOKENIZER_FILES = (
+    "added_tokens.json",
+    "chat_template.jinja",
+    "merges.txt",
+    "sentencepiece.bpe.model",
+    "special_tokens_map.json",
+    "tokenizer.json",
+    "tokenizer.model",
+    "tokenizer_config.json",
+    "vocab.json",
+    "vocab.txt",
+)
 
 
 class _DryRunTokenizer:
@@ -94,6 +110,19 @@ def _load_rows(
     return result
 
 
+def _frozen_tokenizer_files(snapshot: Path) -> dict[str, Path]:
+    """Return only the files requested by the frozen tokenizer allow-list."""
+
+    files = {
+        relative: snapshot / relative
+        for relative in _TOKENIZER_FILES
+        if (snapshot / relative).is_file()
+    }
+    if not files:
+        raise ValueError("pinned model snapshot contains no frozen tokenizer files")
+    return files
+
+
 def _load_tokenizer() -> tuple[Any, dict[str, Any]]:
     try:
         from huggingface_hub import snapshot_download
@@ -103,37 +132,25 @@ def _load_tokenizer() -> tuple[Any, dict[str, Any]]:
             "install transformers and huggingface-hub for a real collection"
         ) from exc
 
-    tokenizer_patterns = [
-        "added_tokens.json",
-        "chat_template.jinja",
-        "merges.txt",
-        "sentencepiece.bpe.model",
-        "special_tokens_map.json",
-        "tokenizer.json",
-        "tokenizer.model",
-        "tokenizer_config.json",
-        "vocab.json",
-        "vocab.txt",
-    ]
     snapshot = Path(
         snapshot_download(
             MODEL_ID,
             revision=MODEL_REVISION,
-            allow_patterns=tokenizer_patterns,
+            allow_patterns=list(_TOKENIZER_FILES),
         )
     )
     tokenizer = AutoTokenizer.from_pretrained(snapshot)
-    files = {
-        path.relative_to(snapshot).as_posix(): path
-        for path in sorted(snapshot.rglob("*"))
-        if path.is_file()
-    }
-    return tokenizer, tokenizer_metadata(
+    metadata = tokenizer_metadata(
         tokenizer,
         model_revision=MODEL_REVISION,
-        explicit_files=files,
+        explicit_files=_frozen_tokenizer_files(snapshot),
         logical_name_or_path=MODEL_ID,
     )
+    if metadata != expected_tokenizer_metadata():
+        raise ValueError(
+            "pinned tokenizer metadata differs from the frozen Experiment 001 identity"
+        )
+    return tokenizer, metadata
 
 
 def _token_arrays(windows: Mapping[str, Sequence[Any]]) -> dict[str, tuple[np.ndarray, np.ndarray]]:
@@ -149,9 +166,10 @@ def _token_arrays(windows: Mapping[str, Sequence[Any]]) -> dict[str, tuple[np.nd
     }
 
 
-def _load_model(device: str) -> Any:
+def _load_model(device: str) -> tuple[Any, dict[str, Any]]:
     try:
         import torch
+        from huggingface_hub import snapshot_download
         from transformers import AutoModelForImageTextToText
     except ImportError as exc:
         raise RuntimeError("install transformers and PyTorch for model collection") from exc
@@ -159,18 +177,34 @@ def _load_model(device: str) -> Any:
     torch.manual_seed(SEED)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(SEED)
-    torch.use_deterministic_algorithms(True)
+    torch.use_deterministic_algorithms(True, warn_only=False)
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
     torch.set_float32_matmul_precision("highest")
-    model = AutoModelForImageTextToText.from_pretrained(
-        MODEL_ID,
+    snapshot = Path(
+        snapshot_download(
+            MODEL_ID,
+            revision=MODEL_REVISION,
+            allow_patterns=[
+                "config.json",
+                "model.safetensors",
+                "model.safetensors.index.json",
+                "*.safetensors",
+            ],
+        )
+    )
+    model_source = describe_model_snapshot(
+        snapshot,
+        model_id=MODEL_ID,
         revision=MODEL_REVISION,
+    )
+    model = AutoModelForImageTextToText.from_pretrained(
+        snapshot,
         dtype="auto",
     )
-    return model.to(device)
+    return model.to(device), model_source
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -210,6 +244,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("--max-retries must be between zero and three")
     if args.phase == "heldout" and args.calibration_manifest is None:
         raise ValueError("--calibration-manifest is required for --phase heldout")
+    if not args.dry_run and args.device.startswith("cuda"):
+        os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
     phases: tuple[Phase, ...] = (
         ("calibration", "heldout") if args.phase == "both" else (args.phase,)
@@ -258,6 +294,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         )
         manifest["source_loading"] = {
             "max_records_per_split": args.max_records if not args.dry_run else 96,
+            "contract": collection_contract(),
             "method": (
                 "synthetic"
                 if args.dry_run
@@ -282,12 +319,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         reject_manifest_overlap(calibration_manifest, manifests["heldout"])
 
     results: dict[str, Any] = {"dry_run": args.dry_run, "phases": {}}
-    model = None if args.dry_run or args.corpus_only else _load_model(device)
+    model_source = None
+    if args.dry_run or args.corpus_only:
+        model = None
+    else:
+        model, model_source = _load_model(device)
     if model is not None:
         parameter_dtypes = sorted({str(parameter.dtype) for parameter in model.parameters()})
         runtime_info = {
             **runtime_metadata(device=device),
             "model_parameter_dtypes": parameter_dtypes,
+            "seed": SEED,
         }
     for phase in phases:
         bundle_hashes = save_phase_bundle(
@@ -298,6 +340,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         )
         phase_result: dict[str, Any] = {"corpus": bundle_hashes}
         if model is not None:
+            if model_source is None:  # pragma: no cover - guarded by the load branch
+                raise RuntimeError("loaded model is missing its snapshot descriptor")
             statistics = collect_model_windows(
                 model,
                 token_arrays=_token_arrays(windows_by_phase[phase]),
@@ -311,7 +355,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 provenance={
                     "corpus_manifest_sha256": bundle_hashes["manifest"]["sha256"],
                     "gptqmodel_module_tree_revision": QWEN35_GPTQMODEL_TREE_REVISION,
-                    "model": {"id": MODEL_ID, "revision": MODEL_REVISION},
+                    "model": model_source,
                     "runtime": runtime_info,
                     "tokenizer": tokenizer_info,
                 },

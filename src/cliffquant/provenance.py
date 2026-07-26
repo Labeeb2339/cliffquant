@@ -15,6 +15,24 @@ from typing import Any
 import numpy as np
 
 
+def numpy_build_metadata() -> dict[str, Any]:
+    """Return path-free NumPy/BLAS build facts that can affect numerical evidence."""
+
+    config = getattr(np.__config__, "CONFIG", {})
+    dependencies = config.get("Build Dependencies", {})
+
+    def dependency(name: str) -> dict[str, Any]:
+        raw = dependencies.get(name, {})
+        return {key: raw.get(key) for key in ("found", "name", "openblas configuration", "version")}
+
+    return {
+        "blas": dependency("blas"),
+        "host": dict(config.get("Machine Information", {}).get("host", {})),
+        "lapack": dependency("lapack"),
+        "simd": dict(config.get("SIMD Extensions", {})),
+    }
+
+
 def sha256_bytes(data: bytes) -> str:
     """Return a lowercase SHA256 digest."""
 
@@ -83,6 +101,7 @@ def runtime_metadata(
         "implementation": platform.python_implementation(),
         "machine": platform.machine(),
         "numpy": np.__version__,
+        "numpy_build": numpy_build_metadata(),
         "packages": packages,
         "platform": platform.platform(),
         "python": platform.python_version(),
@@ -99,6 +118,9 @@ def runtime_metadata(
                 "available": available,
                 "cuda_runtime": torch.version.cuda,
                 "deterministic_algorithms": torch.are_deterministic_algorithms_enabled(),
+                "deterministic_algorithms_warn_only": (
+                    torch.is_deterministic_algorithms_warn_only_enabled()
+                ),
             }
             if available:
                 resolved = torch.device(device)

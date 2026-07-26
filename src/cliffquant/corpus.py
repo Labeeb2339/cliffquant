@@ -23,6 +23,90 @@ MODEL_REVISION = "dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68"
 XNLI_LANGUAGES = ("ar", "es", "hi", "zh")
 ENVIRONMENTS = ("general", "code", "math", "multilingual")
 
+_EXPECTED_TOKENIZER_METADATA = {
+    "class": "Qwen2Tokenizer",
+    "files": {
+        "merges.txt": {
+            "path": "merges.txt",
+            "sha256": "a9d356d7bdf1ef4949e3e748e95b8e10ad9d4e2e838eddc38a0a7b6b94d1db8d",
+            "size_bytes": 3_353_259,
+        },
+        "tokenizer.json": {
+            "path": "tokenizer.json",
+            "sha256": "fe000e3ed39ed12b8d2481d527d44f93c65d37e87645d2dcc80d1bf9d50d2927",
+            "size_bytes": 12_807_196,
+        },
+        "tokenizer_config.json": {
+            "path": "tokenizer_config.json",
+            "sha256": "e611fbccc7c29ef3b1cafb1cb7ea548d189968632901d678fd62be68c47885de",
+            "size_bytes": 16_712,
+        },
+        "vocab.json": {
+            "path": "vocab.json",
+            "sha256": "ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003",
+            "size_bytes": 6_722_759,
+        },
+    },
+    "model_revision": MODEL_REVISION,
+    "name_or_path": MODEL_ID,
+    "special_token_ids": {
+        "bos_token_id": None,
+        "eos_token_id": 248_044,
+        "pad_token_id": 248_044,
+        "unk_token_id": None,
+    },
+    "vocab_size": 248_044,
+}
+
+
+def expected_tokenizer_metadata() -> dict[str, Any]:
+    """Return the exact tokenizer identity frozen for Experiment 001."""
+
+    return {
+        **_EXPECTED_TOKENIZER_METADATA,
+        "files": {
+            name: dict(descriptor)
+            for name, descriptor in _EXPECTED_TOKENIZER_METADATA["files"].items()
+        },
+        "special_token_ids": dict(_EXPECTED_TOKENIZER_METADATA["special_token_ids"]),
+    }
+
+
+_COLLECTION_SOURCE_FILENAMES = {
+    "activation_statistics": "activation_stats.py",
+    "collection_entrypoint": "calibration_cli.py",
+    "corpus_contract": "corpus.py",
+    "dataset_viewer": "dataset_viewer.py",
+    "model_snapshot": "model_snapshot.py",
+    "provenance": "provenance.py",
+    "qwen35_inventory": "qwen35_modules.py",
+}
+
+
+def collection_contract() -> dict[str, Any]:
+    """Fingerprint every semantic source used to create a real corpus bundle."""
+
+    package_dir = Path(__file__).resolve().parent
+    repository_dir = package_dir.parents[1]
+    source_paths = {
+        name: package_dir / filename for name, filename in _COLLECTION_SOURCE_FILENAMES.items()
+    }
+    source_paths["protocol"] = repository_dir / "research" / "EXPERIMENT_001_PROTOCOL.md"
+    missing = [str(path) for path in source_paths.values() if not path.is_file()]
+    if missing:
+        raise ValueError(f"collection contract source files are missing: {missing}")
+    return {
+        "schema": "cliffquant.collection-contract.v1",
+        "sources": {
+            name: {
+                "file": path.name,
+                "sha256": sha256_file(path),
+                "size_bytes": path.stat().st_size,
+            }
+            for name, path in sorted(source_paths.items())
+        },
+    }
+
 
 @dataclass(frozen=True, slots=True)
 class DatasetSource:
