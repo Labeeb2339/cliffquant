@@ -5,7 +5,7 @@ type: software
 authors:
   - given-names: "Muhammad Labeeb Aryan"
     family-names: "bin Mohd Lokman"
-version: 0.1.1
+version: 0.1.2
 license: Apache-2.0
 repository-code: "https://github.com/Labeeb2339/cliffquant"
 url: "https://github.com/Labeeb2339/cliffquant"

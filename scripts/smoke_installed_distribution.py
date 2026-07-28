@@ -16,7 +16,7 @@ from pathlib import Path
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("artifact", type=Path)
-    parser.add_argument("--expected-version", default="0.1.1")
+    parser.add_argument("--expected-version", default="0.1.2")
     return parser
 
 

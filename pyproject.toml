@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cliffquant"
-version = "0.1.1"
+version = "0.1.2"
 description = "Exact minimax FP16 scale selection for a multi-environment diagonal proxy"
 readme = "README.md"
 requires-python = ">=3.11"

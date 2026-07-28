@@ -58,4 +58,4 @@ jobs:
       - name: Smoke-test installed wheel
         run: >-
           python scripts/smoke_installed_distribution.py
-          dist/cliffquant-0.1.1-py3-none-any.whl
+          dist/cliffquant-0.1.2-py3-none-any.whl

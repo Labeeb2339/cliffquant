@@ -7,6 +7,7 @@
 *.yml text eol=lf
 *.yaml text eol=lf
 MANIFEST.in text eol=lf
+LICENSE text eol=lf
 
 # Preserve byte-level evidence identities on every checkout.
 research/results/experiment-001/** -text
