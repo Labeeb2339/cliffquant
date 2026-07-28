@@ -24,7 +24,7 @@ from cliffquant.corpus import (
     MODEL_ID,
     SEED,
     WINDOW_TOKENS,
-    collection_contract,
+    collection_contract_is_supported,
     expected_tokenizer_metadata,
 )
 from cliffquant.dataset_viewer import CACHE_SCHEMA_VERSION, VIEWER_PAGE_SIZE
@@ -673,7 +673,7 @@ def _validate_source_loading(
         raise ValueError("source_loading fields do not match Addendum 001-B")
     if source_loading["cache_directory"] != "dataset-viewer-cache":
         raise ValueError("source_loading cache directory drift")
-    if source_loading["contract"] != collection_contract():
+    if not collection_contract_is_supported(source_loading["contract"]):
         raise ValueError("source_loading collection contract drift")
     if source_loading["max_records_per_split"] != MAX_VALID_RECORDS:
         raise ValueError("source_loading record limit drift")

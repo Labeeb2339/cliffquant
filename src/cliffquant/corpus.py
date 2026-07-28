@@ -5,11 +5,17 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import asdict, dataclass
+from importlib.metadata import PackageNotFoundError, distribution
 from pathlib import Path
 from typing import Any, Literal, TextIO
 
 import numpy as np
 
+from .contract_compat import (
+    EXPERIMENT_001_COLLECTION_CONTRACT,
+    PORTABLE_CORPUS_SOURCE_SHA256,
+    PORTABLE_CORPUS_SOURCE_SIZE_BYTES,
+)
 from .dataset_viewer import HTTPGetter, load_dataset_viewer_rows
 from .provenance import canonical_json_bytes, sha256_bytes, sha256_file
 
@@ -83,15 +89,36 @@ _COLLECTION_SOURCE_FILENAMES = {
 }
 
 
+def _protocol_source_path(package_dir: Path) -> Path:
+    """Locate the canonical protocol in a checkout or installed distribution."""
+
+    checkout_path = package_dir.parents[1] / "research" / "EXPERIMENT_001_PROTOCOL.md"
+    if checkout_path.is_file():
+        return checkout_path
+
+    try:
+        package_distribution = distribution("cliffquant")
+    except PackageNotFoundError:
+        return checkout_path
+
+    expected_tail = ("share", "cliffquant", "EXPERIMENT_001_PROTOCOL.md")
+    for item in package_distribution.files or ():
+        if tuple(item.parts[-3:]) != expected_tail:
+            continue
+        installed_path = Path(package_distribution.locate_file(item)).resolve()
+        if installed_path.is_file():
+            return installed_path
+    return checkout_path
+
+
 def collection_contract() -> dict[str, Any]:
     """Fingerprint every semantic source used to create a real corpus bundle."""
 
     package_dir = Path(__file__).resolve().parent
-    repository_dir = package_dir.parents[1]
     source_paths = {
         name: package_dir / filename for name, filename in _COLLECTION_SOURCE_FILENAMES.items()
     }
-    source_paths["protocol"] = repository_dir / "research" / "EXPERIMENT_001_PROTOCOL.md"
+    source_paths["protocol"] = _protocol_source_path(package_dir)
     missing = [str(path) for path in source_paths.values() if not path.is_file()]
     if missing:
         raise ValueError(f"collection contract source files are missing: {missing}")
@@ -105,6 +132,30 @@ def collection_contract() -> dict[str, Any]:
             }
             for name, path in sorted(source_paths.items())
         },
+    }
+
+
+def collection_contract_is_supported(contract: object) -> bool:
+    """Accept the current contract or the exact immutable Experiment 001 contract."""
+
+    current = collection_contract()
+    if contract == current:
+        return True
+    if contract != EXPERIMENT_001_COLLECTION_CONTRACT:
+        return False
+
+    current_sources = current["sources"]
+    legacy_sources = EXPERIMENT_001_COLLECTION_CONTRACT["sources"]
+    if any(
+        current_sources[name] != descriptor
+        for name, descriptor in legacy_sources.items()
+        if name != "corpus_contract"
+    ):
+        return False
+    return current_sources["corpus_contract"] == {
+        "file": "corpus.py",
+        "sha256": PORTABLE_CORPUS_SOURCE_SHA256,
+        "size_bytes": PORTABLE_CORPUS_SOURCE_SIZE_BYTES,
     }
 
 

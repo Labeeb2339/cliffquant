@@ -1,5 +1,6 @@
 include LICENSE
 include README.md
+include CITATION.cff
 recursive-include benchmarks *.py
 recursive-include research *.md
 recursive-include requirements *.txt

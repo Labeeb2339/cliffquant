@@ -27,7 +27,7 @@ from .corpus import (
     DatasetSource,
     Phase,
     build_phase_manifest,
-    collection_contract,
+    collection_contract_is_supported,
     expected_tokenizer_metadata,
     render_record,
 )
@@ -406,7 +406,7 @@ def _replay_sources(
         raise ValueError("source_loading fields drift")
     if source_loading["cache_directory"] != "dataset-viewer-cache":
         raise ValueError("source_loading cache directory drift")
-    if source_loading["contract"] != collection_contract():
+    if not collection_contract_is_supported(source_loading["contract"]):
         raise ValueError("source_loading collection contract drift")
     if source_loading["max_records_per_split"] != MAX_VALID_RECORDS:
         raise ValueError("source_loading record limit drift")
@@ -445,7 +445,7 @@ def _replay_sources(
             replayed_audits[source.key] = replay.audit
     replayed_loading = {
         "cache_directory": "dataset-viewer-cache",
-        "contract": collection_contract(),
+        "contract": source_loading["contract"],
         "max_records_per_split": MAX_VALID_RECORDS,
         "method": _SOURCE_METHOD,
         "page_size": VIEWER_PAGE_SIZE,

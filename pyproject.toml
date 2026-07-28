@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cliffquant"
-version = "0.1.0"
+version = "0.1.1"
 description = "Exact minimax FP16 scale selection for a multi-environment diagonal proxy"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -33,6 +33,9 @@ figures = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.data-files]
+"share/cliffquant" = ["research/EXPERIMENT_001_PROTOCOL.md"]
 
 [tool.pytest.ini_options]
 addopts = "-q"

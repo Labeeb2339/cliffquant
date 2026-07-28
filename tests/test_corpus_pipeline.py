@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from cliffquant.contract_compat import EXPERIMENT_001_COLLECTION_CONTRACT
 from cliffquant.corpus import (
     CALIBRATION_SOURCES,
     CALIBRATION_WINDOWS,
@@ -19,6 +20,8 @@ from cliffquant.corpus import (
     XNLI_LANGUAGES,
     build_environment_windows,
     build_phase_manifest,
+    collection_contract,
+    collection_contract_is_supported,
     reject_manifest_overlap,
     render_record,
     save_phase_bundle,
@@ -55,6 +58,41 @@ def test_protocol_constants_are_frozen() -> None:
         "b8dd5d7af51114dbda02c0e3f6133f332186418e"
     )
     assert [source.split for source in HELDOUT_SOURCES["code"]] == ["validation", "test"]
+
+
+def test_collection_contract_supports_current_and_frozen_evidence() -> None:
+    current = collection_contract()
+    assert collection_contract_is_supported(current)
+    assert current["sources"]["protocol"] == {
+        "file": "EXPERIMENT_001_PROTOCOL.md",
+        "sha256": "8fb027b720798401a10f3eeef5501e924de5e619c4f5b152bbdf61079c345cb0",
+        "size_bytes": 17_663,
+    }
+
+    root = Path(__file__).resolve().parents[1]
+    corpus_root = root / "research" / "results" / "experiment-001" / "corpus"
+    frozen_contracts = [
+        json.loads((corpus_root / f"{phase}.manifest.json").read_text(encoding="utf-8"))[
+            "source_loading"
+        ]["contract"]
+        for phase in ("calibration", "heldout")
+    ]
+    assert frozen_contracts == [
+        EXPERIMENT_001_COLLECTION_CONTRACT,
+        EXPERIMENT_001_COLLECTION_CONTRACT,
+    ]
+    assert all(frozen != current for frozen in frozen_contracts)
+    assert all(collection_contract_is_supported(frozen) for frozen in frozen_contracts)
+    frozen = frozen_contracts[0]
+    assert all(
+        current["sources"][name] == descriptor
+        for name, descriptor in frozen["sources"].items()
+        if name != "corpus_contract"
+    )
+
+    drifted = json.loads(json.dumps(frozen))
+    drifted["sources"]["protocol"]["size_bytes"] += 1
+    assert not collection_contract_is_supported(drifted)
 
 
 def test_renderers_filter_invalid_rows_and_expand_xnli_languages() -> None:

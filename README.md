@@ -138,6 +138,12 @@ manifest SHA256 is
 python -m pip install -e .
 ```
 
+Check the installed calibration path without downloading a model or dataset:
+
+```bash
+python -m cliffquant.calibration_cli --dry-run --output-dir cliffquant-dry-run
+```
+
 ```python
 from cliffquant import QuantizerSpec, solve_breakpoint_exact
 

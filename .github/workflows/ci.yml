@@ -54,3 +54,8 @@ jobs:
 
       - name: Build distributions
         run: python -m build
+
+      - name: Smoke-test installed wheel
+        run: >-
+          python scripts/smoke_installed_distribution.py
+          dist/cliffquant-0.1.1-py3-none-any.whl
