@@ -11,6 +11,7 @@ LICENSE text eol=lf
 
 # Preserve byte-level evidence identities on every checkout.
 research/results/experiment-001/** -text
-figures/figure-manifest.json -text
+research/results/autopolicy-001/** -text
+figures/*manifest.json -text
 figures/*.png -text
 requirements/verification-*.txt -text

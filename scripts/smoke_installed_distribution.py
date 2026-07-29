@@ -16,7 +16,7 @@ from pathlib import Path
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("artifact", type=Path)
-    parser.add_argument("--expected-version", default="0.1.2")
+    parser.add_argument("--expected-version", default="0.2.0")
     return parser
 
 
@@ -96,6 +96,78 @@ def main(argv: Sequence[str] | None = None) -> int:
             "'size_bytes':17663}"
         )
         _run([str(installed_python), "-I", "-c", import_check], cwd=root, env=env)
+
+        installed_cli = (
+            environment_dir / "Scripts" / "cliffquant.exe"
+            if os.name == "nt"
+            else environment_dir / "bin" / "cliffquant"
+        )
+        _run([str(installed_cli), "--version"], cwd=root, env=env)
+        _run([str(installed_cli), "autopolicy", "--help"], cwd=root, env=env)
+
+        autopolicy_dir = root / "autopolicy"
+        autopolicy_dir.mkdir()
+        candidate_path = autopolicy_dir / "candidates.json"
+        plan_path = autopolicy_dir / "plan.json"
+        fixture_code = (
+            "from pathlib import Path; "
+            "from cliffquant.autopolicy_artifacts import "
+            "CANDIDATE_SCHEMA,write_candidate_bundle; "
+            f"path=Path({str(candidate_path)!r}); "
+            "write_candidate_bundle(path,{"
+            "'schema':CANDIDATE_SCHEMA,'status':'complete','profile':'wheel-smoke',"
+            "'scope':{'budget_scope':'logical-target-weight-and-scale-payload',"
+            "'checkpoint_export':False},"
+            "'source':{'kind':'synthetic'},'environments':['general','code'],"
+            "'distortion_metric':{'name':'synthetic','additive_across_units':True,"
+            "'downstream_metric':False},"
+            "'candidate_definitions':{'dense16':{},'w4':{}},"
+            "'units':[{'unit_id':'layer.0','weight_key':'layer.0.weight',"
+            "'shape':[8,128],'group_count':8,'candidates':["
+            "{'candidate_id':'dense16','logical_bytes':2048,"
+            "'groupwise_max_distortion':0.0,"
+            "'per_environment_distortion':{'general':0.0,'code':0.0},"
+            "'metadata':{'bits':16}},"
+            "{'candidate_id':'w4','logical_bytes':528,"
+            "'groupwise_max_distortion':2.0,"
+            "'per_environment_distortion':{'general':2.0,'code':1.0},"
+            "'metadata':{'bits':4}}],"
+            "'evidence':{'kind':'synthetic'}}],"
+            "'totals':{'dense16':2048,'w4':528},"
+            "'builder':{'name':'wheel-smoke'}})"
+        )
+        _run([str(installed_python), "-I", "-c", fixture_code], cwd=root, env=env)
+        _run(
+            [
+                str(installed_cli),
+                "autopolicy",
+                "solve",
+                "--candidates",
+                str(candidate_path),
+                "--budget-bytes",
+                "528",
+                "--output",
+                str(plan_path),
+            ],
+            cwd=root,
+            env=env,
+        )
+        _run(
+            [
+                str(installed_cli),
+                "autopolicy",
+                "verify",
+                "--candidates",
+                str(candidate_path),
+                "--plan",
+                str(plan_path),
+            ],
+            cwd=root,
+            env=env,
+        )
+        if not plan_path.is_file():
+            raise ValueError("installed AutoPolicy CLI did not create a plan")
+
         _run(
             [
                 str(installed_python),

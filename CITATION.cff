@@ -5,15 +5,17 @@ type: software
 authors:
   - given-names: "Muhammad Labeeb Aryan"
     family-names: "bin Mohd Lokman"
-version: 0.1.2
+version: 0.2.0
 license: Apache-2.0
 repository-code: "https://github.com/Labeeb2339/cliffquant"
 url: "https://github.com/Labeeb2339/cliffquant"
 abstract: >-
   Exact minimax FP16 scale selection for a frozen multi-environment diagonal
-  quantization proxy, checked against exhaustive reference enumeration.
+  quantization proxy, plus exact logical-budget policy planning over recorded
+  mixed-precision candidates.
 keywords:
   - quantization
   - W4A16
   - model compression
+  - mixed precision
   - reproducible research
