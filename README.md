@@ -104,6 +104,54 @@ calibration environment separately, and optimizes the worst-environment scale
 objective exactly. The RecurQuant diagnostic is context for this decision, not
 part of CliffQuant's Experiment 001 evidence.
 
+## AutoPolicy 001: exact logical-budget planning
+
+AutoPolicy turns the frozen Experiment 001 measurements into an auditable
+mixed-precision plan. It records W4 CliffQuant, W8 AbsMax, and unquantized BF16
+source-reference candidates for all 150 target matrices. The published robust
+view selects one precision per transformer block and exactly minimizes the
+recorded worst-environment additive proxy under a logical target-payload
+budget.
+
+![AutoPolicy logical-byte frontier](figures/autopolicy-logical-byte-frontier.png)
+
+| Logical bits per target weight | W4 blocks | W8 blocks | BF16 blocks | Worst-environment proxy |
+|---:|---:|---:|---:|---:|
+| `4.125` | 24 | 0 | 0 | `1078.217405` |
+| `7.087` | 6 | 18 | 0 | `218.811198` |
+| `8.125` | 0 | 24 | 0 | `4.745117` |
+| `16.000` | 0 | 0 | 24 | `0.000000` |
+
+At the representative `440,721,408`-byte budget, the exact plan uses
+`440,303,616` logical bytes and selects 6 W4 plus 18 W8 blocks. The full
+150-matrix robust frontier was not tractable with the current exact dynamic
+program, so the robust publication view makes a transformer-block constraint
+explicit instead of hiding an approximation. Matrix-level exact planning
+remains available for the scalar `sum-groupwise-max` objective.
+
+AutoPolicy does not yet export or benchmark a runnable mixed-bit checkpoint.
+Its bytes are logical target payload, not checkpoint size or runtime memory,
+and its proxy values are not NLL or accuracy predictions.
+
+[Read the method](research/AUTOPOLICY_001_METHOD.md)
+|
+[Inspect the measured result](research/AUTOPOLICY_001_RESULT.md)
+|
+[Review the prior-art boundary](research/AUTOPOLICY_PRIOR_ART.md)
+|
+[Verify the portable evidence](research/results/autopolicy-001)
+
+From a repository checkout:
+
+```bash
+cliffquant autopolicy verify \
+  --candidates research/results/autopolicy-001/candidates.json
+
+cliffquant autopolicy verify \
+  --candidates research/results/autopolicy-001/candidates-transformer-blocks.json \
+  --plan research/results/autopolicy-001/plan-blocks-7bpp.json
+```
+
 ## Verification
 
 - `10,000 / 10,000` deterministic solver cases matched exhaustive FP16
@@ -202,7 +250,7 @@ python -m pytest
 python -m build
 ```
 
-Regenerate all three figures from the finalized proxy and NLL artifacts:
+Regenerate the three proxy/NLL figures from the finalized artifacts:
 
 ```bash
 python scripts/generate_figures.py \
@@ -214,6 +262,20 @@ python scripts/generate_figures.py \
 The generator verifies the input checksum manifests before parsing results and
 writes its own provenance to
 [`figures/figure-manifest.json`](figures/figure-manifest.json).
+
+Regenerate the AutoPolicy frontier and its fourth figure from the checked-in
+transformer-block candidate table:
+
+```bash
+python scripts/generate_autopolicy_frontier.py \
+  --candidates research/results/autopolicy-001/candidates-transformer-blocks.json \
+  --output-json research/results/autopolicy-001/frontier.json \
+  --output-figure figures/autopolicy-logical-byte-frontier.png \
+  --output-manifest figures/autopolicy-logical-byte-frontier.manifest.json
+```
+
+That generator re-solves every recorded budget and writes a separate manifest
+binding the graph and frontier to the exact candidate table and generator.
 
 Validate the exact checked-in inventory on any supported development platform:
 

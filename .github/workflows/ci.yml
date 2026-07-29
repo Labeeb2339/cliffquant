@@ -49,6 +49,11 @@ jobs:
           --inventory-only
           research/results/experiment-001
 
+      - name: Validate AutoPolicy evidence
+        run: >-
+          python scripts/validate_autopolicy_release.py
+          research/results/autopolicy-001
+
       - name: Run tests
         run: python -m pytest --basetemp .pytest-ci
 
@@ -58,4 +63,4 @@ jobs:
       - name: Smoke-test installed wheel
         run: >-
           python scripts/smoke_installed_distribution.py
-          dist/cliffquant-0.1.2-py3-none-any.whl
+          dist/cliffquant-0.2.0-py3-none-any.whl

@@ -1,7 +1,7 @@
 # Prior-art boundary
 
 This is a bounded primary-source and public-code collision audit through
-2026-07-26, not a proof of novelty.
+2026-07-30, not a proof of novelty.
 
 The closest work I found is
 [PiSO](https://arxiv.org/abs/2606.10890), which already gives an exact
@@ -12,6 +12,12 @@ first groupwise W4 scale search.
 
 Other close references include:
 
+- [MixQuant](https://arxiv.org/abs/2607.23047), which formulates per-module
+  mixed-bit allocation as a multiple-choice knapsack problem using
+  context-marginal distortion and one calibration for multiple budgets;
+- [GAMMA](https://arxiv.org/abs/2605.18475), which uses teacher-forced
+  reconstruction scoring and integer programming for exact-budget,
+  quantizer-agnostic mixed precision with reusable any-budget scores;
 - [NeUQI](https://arxiv.org/abs/2505.17595), which derives efficient scale and
   zero-point initialization for uniform low-bit quantization;
 - [DASH-Q](https://arxiv.org/abs/2604.13806), which uses stable diagonal
@@ -47,6 +53,12 @@ Other close references include:
   distribution-shift reliability an explicit PTQ concern; and
 - [the calibration-data study](https://arxiv.org/abs/2311.09755), which shows
   that PTQ quality can vary substantially with calibration data.
+
+For AutoPolicy specifically, automatic budget-aware mixed precision is already
+well established. The separate
+[AutoPolicy prior-art boundary](AUTOPOLICY_PRIOR_ART.md) records the direct
+allocation collisions and excludes first-MCKP, first-mixed-bit, or first
+automatic-policy claims.
 
 Generic worst-group optimization also predates this work; for example,
 [Group DRO](https://arxiv.org/abs/1911.08731) optimizes worst-group loss under

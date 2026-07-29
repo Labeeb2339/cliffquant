@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cliffquant"
-version = "0.1.2"
-description = "Exact minimax FP16 scale selection for a multi-environment diagonal proxy"
+version = "0.2.0"
+description = "Exact multi-environment quantization scale and logical-budget policy research"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
@@ -21,6 +21,10 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
+autopolicy-experiment = [
+  "ml-dtypes>=0.5.1",
+  "safetensors>=0.8.0",
+]
 dev = [
   "build>=1.2",
   "packaging>=26.2",
@@ -30,6 +34,9 @@ dev = [
 figures = [
   "matplotlib==3.10.8",
 ]
+
+[project.scripts]
+cliffquant = "cliffquant.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
