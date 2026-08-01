@@ -202,12 +202,19 @@ python -m pytest
 python -m build
 ```
 
-Regenerate all three figures from the finalized proxy and NLL artifacts:
+The NLL artifact authenticates the evaluator source bytes from commit
+`a48d68e`. Current `main` deliberately rejects that historical report because
+the evaluator has since changed. Regenerate all three figures from a detached
+LF worktree of the evidence-producing commit:
 
 ```bash
+git -c core.autocrlf=false worktree add --detach ../cliffquant-experiment-001 a48d68e
+cd ../cliffquant-experiment-001
+python -m pip install -e ".[dev,figures]"
+
 python scripts/generate_figures.py \
-  --input-dir artifacts/experiment-001/proxy \
-  --nll-input-dir artifacts/experiment-001/full-model/evidence/nll \
+  --input-dir research/results/experiment-001/proxy \
+  --nll-input-dir research/results/experiment-001/nll \
   --output-dir figures
 ```
 
